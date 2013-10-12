@@ -2,7 +2,7 @@ package main
 
 import (
     "fmt"
-    "gopark"
+    "github.com/mijia/gopark"
     "math"
     "math/rand"
     "strconv"

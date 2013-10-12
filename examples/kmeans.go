@@ -3,7 +3,7 @@ package main
 import (
     "encoding/gob"
     "fmt"
-    "gopark"
+    "github.com/mijia/gopark"
     "math/rand"
     "strconv"
     "strings"
