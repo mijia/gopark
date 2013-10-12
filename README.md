@@ -84,9 +84,17 @@ Just make sure GOB knows your objects behind the interface{} and []interface{}.
 Things not included
 -------------
 So far, the Accumulator and Broadcast are still not implemented. 
+
 And GoPark now really cannot run in the distributed mode.
 
 Have fun~
+
 Originally, I have only two goals in writing this,
 * Write some real stuff in Go, since I am learning the language
 * I am doing data mining jobs and I need some better concurrent framework for performance, and runs locally is ok for me.
+
+Spark/DPark
+-------------
+Those projects are really awesome and the RDD is really a fantastic data structure or design pattern. I learned a lot in those. 
+
+Really want to thank those two projects.
