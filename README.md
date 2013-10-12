@@ -87,3 +87,6 @@ So far, the Accumulator and Broadcast are still not implemented.
 And GoPark now really cannot run in the distributed mode.
 
 Have fun~
+Originally, I have only two goals in writing this,
+* Write some real stuff in Go, since I am learning the language
+* I am doing data mining jobs and I need some better concurrent framework for performance, and runs locally is ok for me.
