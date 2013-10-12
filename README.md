@@ -95,6 +95,6 @@ Originally, I have only two goals in writing this,
 
 Spark/DPark
 -------------
-Those projects are really awesome and the RDD is really a fantastic data structure or design pattern. I learned a lot in those. 
+These projects are really awesome and the RDD is really a fantastic data structure or design pattern. I learned a lot in them. 
 
-Really want to thank those two projects.
+Really want to thank these two projects.
