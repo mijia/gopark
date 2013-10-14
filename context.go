@@ -159,6 +159,14 @@ func (c *Context) Data(d []interface{}) RDD {
     return newDataRDD(c, d)
 }
 
+func (c *Context) Accumulator(initValue int) Accumulator {
+    return newIntAccumulator(initValue)
+}
+
+func (c *Context) AccumulatorWithParam(initValue interface{}, param AccumulatorParam) Accumulator {
+    return newAccumulator(initValue, param)
+}
+
 func NewContext(jobName string) *Context {
     return &Context{
         jobName:    jobName,

@@ -30,12 +30,12 @@ func TestTextFile(t *testing.T) {
     c := NewContext("TestTextFile")
     fmt.Printf("\n\n%s\n", c)
     defer c.Stop()
-    txt := c.TextFile("./")
-    samples := txt.Map(func(arg interface{}) interface{} {
-        vs := strings.Split(arg.(string), "\t")
-        uuid := vs[0]
-        feature := vs[2]
-        return &KeyValue{feature, uuid}
+    txt := c.TextFile("examples/points.txt")
+    samples := txt.Map(func(line interface{}) interface{} {
+        vs := strings.Fields(line.(string))
+        d2 := vs[1]
+        y := vs[2]
+        return &KeyValue{y, d2}
     }).Take(5)
     for _, sample := range samples {
         fmt.Println(sample)
@@ -295,5 +295,21 @@ func TestSortByKey(t *testing.T) {
     })
     if !sort.IsSorted(sort.Reverse(sorter)) {
         t.Error("SortByKey failed, is not sorted.")
+    }
+}
+
+func TestAccumulator(t *testing.T) {
+    setupEnv()
+    c := NewContext("TestAccumulator")
+    fmt.Printf("\n\n%s\n", c)
+    defer c.Stop()
+    d := []interface{}{1, 2, 3, 5, 6, 7, 8}[:]
+    accu := c.Accumulator(0)
+    c.Data(d).Foreach(func(_ interface{}) {
+        accu.Add(1)
+    })
+    fmt.Println(accu.Value())
+    if accu.Value() != 7 {
+        t.Error("Accumulator error")
     }
 }
