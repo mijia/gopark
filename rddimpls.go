@@ -73,20 +73,8 @@ type _PartitionMappedRDD struct {
 }
 
 func (r *_PartitionMappedRDD) compute(split Split) Yielder {
-    yield := make(chan interface{}, 1)
-    go func() {
-        log.Printf("Computing <%s> on Split[%d]", r, split.getIndex())
-        values := make([]interface{}, 0)
-        for arg := range r.previous.traverse(split) {
-            values = append(values, arg)
-        }
-        mappedValues := r.fn(values)
-        for _, value := range mappedValues {
-            yield <- value
-        }
-        close(yield)
-    }()
-    return yield
+    log.Printf("Computing <%s> on Split[%d]", r, split.getIndex())
+    return r.fn(r.previous.traverse(split))
 }
 
 func (r *_PartitionMappedRDD) init(rdd RDD, f PartitionMapperFunc) {

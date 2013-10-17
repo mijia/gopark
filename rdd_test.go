@@ -89,11 +89,16 @@ func TestSimpleMappers(t *testing.T) {
         t.Errorf("Sample Data error, %v", samples)
     }
 
-    mapPartition := data.MapPartition(func(x []interface{}) []interface{} {
-        results := make([]interface{}, len(x)*2)
-        copy(results, x)
-        copy(results[len(x):], x)
-        return results
+    mapPartition := data.MapPartition(func(iter Yielder) Yielder {
+        yield := make(chan interface{}, 1)
+        go func() {
+            for value := range iter {
+                yield <- value
+                yield <- value
+            }
+            close(yield)
+        }()
+        return yield
     }).Collect()
     fmt.Println(mapPartition)
     if len(mapPartition) != 2*len(d) {

@@ -10,7 +10,7 @@ import (
 )
 
 type MapperFunc func(interface{}) interface{}
-type PartitionMapperFunc func([]interface{}) []interface{}
+type PartitionMapperFunc func(Yielder) Yielder
 type FlatMapperFunc func(interface{}) []interface{}
 type ReducerFunc func(interface{}, interface{}) interface{}
 type FilterFunc func(interface{}) bool
@@ -199,17 +199,41 @@ func (r *_BaseRDD) SortByKey_N(fn KeyLessFunc, reverse bool, numPartitions int) 
         }
         return list
     }
+    goSortMapper := func(iter Yielder) Yielder {
+        yield := make(chan interface{}, 1)
+        go func() {
+            values := make([]interface{}, 0)
+            for value := range iter {
+                values = append(values, value)
+            }
+            sorted := sortMapper(values)
+            for _, value := range sorted {
+                yield <- value
+            }
+            close(yield)
+        }()
+        return yield
+    }
 
     if r.len() == 1 {
-        return r.MapPartition(sortMapper)
+        return r.MapPartition(goSortMapper)
     }
     // we choose some sample records as the key to partition results
     n := numPartitions * 10 / r.len()
-    samples := r.MapPartition(func(x []interface{}) []interface{} {
-        if len(x) >= n {
-            return x[:n]
-        }
-        return x
+    samples := r.MapPartition(func(iter Yielder) Yielder {
+        yield := make(chan interface{}, 1)
+        go func() {
+            index := 0
+            for value := range iter {
+                yield <- value
+                index++
+                if index >= n {
+                    break
+                }
+            }
+            close(yield)
+        }()
+        return yield
     }).Collect()
     samples = sortMapper(samples)
     keys := make([]interface{}, 0)
@@ -233,7 +257,7 @@ func (r *_BaseRDD) SortByKey_N(fn KeyLessFunc, reverse bool, numPartitions int) 
             }
         }
         return results
-    }).MapPartition(sortMapper)
+    }).MapPartition(goSortMapper)
 }
 
 func (r *_BaseRDD) Cartesian(other RDD) RDD {
