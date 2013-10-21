@@ -25,27 +25,26 @@ func (v Vector) Minus(o Vector) Vector {
 }
 
 func (v Vector) Multiply(m float64) Vector {
+    result := make(Vector, len(v))
     for i := range v {
-        v[i] *= m
+        result[i] = v[i] * m
     }
-    return v
+    return result
 }
 
 func (v Vector) Divide(d float64) Vector {
     if d == 0 {
         panic(fmt.Errorf("Vector divided by zero."))
     }
+    result := make(Vector, len(v))
     for i := range v {
-        v[i] /= d
+        result[i] = v[i] / d
     }
     return v
 }
 
 func (v Vector) Sign() Vector {
-    for i := range v {
-        v[i] *= -1
-    }
-    return v
+    return v.Multiply(-1)
 }
 
 func (v Vector) Sum() float64 {

@@ -587,8 +587,12 @@ func (r *_DataRDD) String() string {
 }
 
 func newDataRDD(ctx *Context, data []interface{}) RDD {
+    return newDataRDD_N(ctx, data, env.parallel)
+}
+
+func newDataRDD_N(ctx *Context, data []interface{}, numPartitions int) RDD {
     r := &_DataRDD{}
-    r.init(ctx, data, env.parallel)
+    r.init(ctx, data, numPartitions)
     return r
 }
 

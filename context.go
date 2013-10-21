@@ -159,6 +159,10 @@ func (c *Context) Data(d []interface{}) RDD {
     return newDataRDD(c, d)
 }
 
+func (c *Context) Data_N(d []interface{}, numPartitions int) RDD {
+    return newDataRDD_N(c, d, numPartitions)
+}
+
 func (c *Context) Accumulator(initValue int) Accumulator {
     return newIntAccumulator(initValue)
 }
