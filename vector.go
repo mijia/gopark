@@ -4,12 +4,28 @@ import (
     "encoding/gob"
     "fmt"
     "math"
+    "math/rand"
+    "time"
 )
 
 type Vector []float64
 
 func init() {
     gob.Register(new(Vector))
+}
+
+func NewZeroVector(size int) Vector {
+    v := make(Vector, size)
+    return v
+}
+
+func NewRandomVector(size int) Vector {
+    r := rand.New(rand.NewSource(time.Now().Unix()))
+    v := make(Vector, size)
+    for i := range v {
+        v[i] = r.Float64()
+    }
+    return v
 }
 
 func (v Vector) Plus(o Vector) Vector {
@@ -64,6 +80,10 @@ func (v Vector) Dot(o Vector) float64 {
         sum += v[i] * o[i]
     }
     return sum
+}
+
+func (v Vector) Magnitude() float64 {
+    return math.Sqrt(v.Dot(v))
 }
 
 func (v Vector) EulaDistance(o Vector) float64 {
