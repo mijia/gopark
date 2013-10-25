@@ -83,7 +83,8 @@ Just make sure GOB knows your objects behind the interface{} and []interface{}.
 
 Things not included
 -------------
-So far, the Accumulator and Broadcast are still not implemented. 
+So far, the Broadcast are still not implemented. I am just using the
+vars in closure.
 
 And GoPark now really cannot run in the distributed mode.
 
