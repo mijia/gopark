@@ -3,7 +3,6 @@ package gopark
 import (
     "flag"
     "fmt"
-    "log"
     "os"
     "path"
     "time"
@@ -15,7 +14,6 @@ type _Environment struct {
     goparkWorkDir string
     jobWorkDir    string
     started       bool
-    verbose       bool
 }
 
 func (e *_Environment) getLocalShufflePath(shuffleId int64, inputId, outputId int) string {
@@ -52,6 +50,8 @@ func (e *_Environment) start() {
         os.Mkdir(e.jobWorkDir, os.ModePerm)
     }
 
+    // need to setup the basic tracker servers and etc.
+
     e.started = true
 }
 
@@ -69,17 +69,10 @@ func init() {
     env = &_Environment{}
 }
 
-func parklog(fmt string, v ...interface{}) {
-    if env.verbose {
-        log.Printf(fmt, v...)
-    }
-}
-
 func ParseOptions() {
     flag.StringVar(&env.master, "master", "local", "Master of Gpark: local")
     flag.IntVar(&env.parallel, "p", 2, "Number of parallelism level, must >= 0")
     flag.StringVar(&env.goparkWorkDir, "workdir", "/opt/tmp", "Working Directory of Gpark")
-    flag.BoolVar(&env.verbose, "v", false, "Log the detail debug information")
     flag.Parse()
 
     if env.parallel < 0 {

@@ -1,14 +1,11 @@
 package gopark
 
 import (
-    "encoding/gob"
     "fmt"
-    "github.com/mijia/ty"
     "log"
     "os"
     "os/signal"
     "path/filepath"
-    "reflect"
     "runtime"
     "syscall"
     "time"
@@ -23,34 +20,32 @@ func (kv *KeyValue) String() string {
     return fmt.Sprintf("%v:%v", kv.Key, kv.Value)
 }
 
+type KeyGroups struct {
+    Key    interface{}
+    Groups [][]interface{}
+}
+
+type KeyLessFunc func(x, y interface{}) bool
+
 type ParkSorter struct {
-    values reflect.Value
-    fn     interface{}
+    values []interface{}
+    fn     KeyLessFunc
 }
 
 func (s *ParkSorter) Len() int {
-    return s.values.Len()
+    return len(s.values)
 }
 
 func (s *ParkSorter) Swap(i, j int) {
-    tmp := s.values.Index(i).Interface()
-    s.values.Index(i).Set(s.values.Index(j))
-    s.values.Index(j).Set(reflect.ValueOf(tmp))
+    s.values[i], s.values[j] = s.values[j], s.values[i]
 }
 
 func (s *ParkSorter) Less(i, j int) bool {
-    vx, vy := s.values.Index(i), s.values.Index(j)
-    chk := ty.Check(new(func(func(ty.A, ty.A) bool, ty.A, ty.A) bool), s.fn, vx.Interface(), vy.Interface())
-    vfn := chk.Args[0]
-    return vfn.Call([]reflect.Value{vx, vy})[0].Interface().(bool)
+    return s.fn(s.values[i], s.values[j])
 }
 
-func NewParkSorter(values interface{}, fn interface{}) *ParkSorter {
-    vt := reflect.ValueOf(values)
-    if vt.Kind() != reflect.Slice {
-        log.Panicf("Cannot sort non-slice type of data, you are providing %s", vt.Type())
-    }
-    return &ParkSorter{vt, fn}
+func NewParkSorter(values []interface{}, fn KeyLessFunc) *ParkSorter {
+    return &ParkSorter{values, fn}
 }
 
 type Yielder chan interface{}
@@ -75,7 +70,7 @@ func (c *Context) init() {
 
     c.scheduler = newLocalScheduler()
     c.initialzed = true
-    parklog("Gpark Context [%s] initialzed.", c.jobName)
+    log.Printf("Gpark Context [%s] initialzed.", c.jobName)
 }
 
 func (c *Context) start() {
@@ -91,7 +86,7 @@ func (c *Context) start() {
     signal.Notify(signalChan, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGABRT)
     go func() {
         s := <-signalChan
-        parklog("Captured the signal %v\n", s)
+        log.Printf("Captured the signal %v\n", s)
         c.Stop()
         os.Exit(2)
     }()
@@ -160,11 +155,11 @@ func (c *Context) Union(rdds []RDD) RDD {
     return newUnionRDD(c, rdds)
 }
 
-func (c *Context) Data(d interface{}) RDD {
+func (c *Context) Data(d []interface{}) RDD {
     return newDataRDD(c, d)
 }
 
-func (c *Context) Data_N(d interface{}, numPartitions int) RDD {
+func (c *Context) Data_N(d []interface{}, numPartitions int) RDD {
     return newDataRDD_N(c, d, numPartitions)
 }
 
@@ -185,10 +180,8 @@ func NewContext(jobName string) *Context {
 }
 
 func init() {
-    log.SetFlags(log.LstdFlags)
+    log.SetFlags(log.LstdFlags | log.Lshortfile)
     runtime.GOMAXPROCS(runtime.NumCPU())
-
-    gob.Register(new(KeyValue))
 }
 
 var _ = fmt.Println
