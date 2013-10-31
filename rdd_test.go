@@ -2,10 +2,17 @@ package gopark
 
 import (
     "fmt"
+    "reflect"
     "sort"
     "strings"
     "testing"
 )
+
+func assertDeep(t *testing.T, v1, v2 interface{}) {
+    if !reflect.DeepEqual(v1, v2) {
+        t.Fatalf("%v != %v", v1, v2)
+    }
+}
 
 func setupEnv() {
     env.master = "local"
@@ -18,11 +25,12 @@ func TestDataRDD(t *testing.T) {
     c := NewContext("TestDataRDD")
     fmt.Printf("\n\n%s\n", c)
     defer c.Stop()
-    a := []interface{}{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}[:]
+    a := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}[:]
     data := c.Data(a)
-    if data.Count() != 10 {
-        t.Errorf("Data parallellized error, with %s", data)
-    }
+    fmt.Println(data.Count())
+
+    assertDeep(t, data.Count(), 10)
+    assertDeep(t, data.Collect().([]int), a)
 }
 
 func TestTextFile(t *testing.T) {
@@ -31,21 +39,16 @@ func TestTextFile(t *testing.T) {
     fmt.Printf("\n\n%s\n", c)
     defer c.Stop()
     txt := c.TextFile("examples/points.txt")
-    samples := txt.Map(func(line interface{}) interface{} {
-        vs := strings.Fields(line.(string))
+    samples := txt.Map(func(line string) *KeyValue {
+        vs := strings.Fields(line)
         d2 := vs[1]
         y := vs[2]
         return &KeyValue{y, d2}
-    }).Take(5)
+    }).Take(5).([]*KeyValue)
     for _, sample := range samples {
         fmt.Println(sample)
-        if _, ok := sample.(*KeyValue); !ok {
-            t.Error("TextFile KeyValue Error")
-        }
     }
-    if len(samples) != 5 {
-        t.Errorf("TextFile Samples length error, %d", len(samples))
-    }
+    assertDeep(t, len(samples), 5)
 }
 
 func TestSimpleMappers(t *testing.T) {
@@ -53,37 +56,34 @@ func TestSimpleMappers(t *testing.T) {
     c := NewContext("TestSimpleMappers")
     fmt.Printf("\n\n%s\n", c)
     defer c.Stop()
-    d := []interface{}{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}[:]
+    d := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}[:]
     data := c.Data(d)
 
-    mData := data.Map(func(arg interface{}) interface{} {
+    mData := data.Map(func(arg int) int {
         return arg
     })
     fmt.Println(mData.Collect())
-    if int(mData.Count()) != len(d) {
+    if mData.Count() != len(d) {
         t.Errorf("Mapping data error, %v", mData.Collect())
     }
 
-    flatData := mData.FlatMap(func(arg interface{}) []interface{} {
-        t := make([]interface{}, 2)
-        t[0] = arg
-        t[1] = arg.(int) * 10
-        return t
+    flatData := mData.FlatMap(func(arg int) []int {
+        return []int{arg, arg * 10}
     })
     fmt.Println(flatData.Collect())
-    if int(flatData.Count()) != 2*len(d) {
+    if flatData.Count() != 2*len(d) {
         t.Errorf("FlatMap data error, %v", flatData.Collect())
     }
 
-    filterData := flatData.Filter(func(arg interface{}) bool {
-        return arg.(int) < 10
+    filterData := flatData.Filter(func(arg int) bool {
+        return arg < 10
     })
     fmt.Println(filterData.Collect())
-    if int(filterData.Count()) <= 0 {
+    if filterData.Count() <= 0 {
         t.Errorf("Filter data error, %v", filterData.Collect())
     }
 
-    samples := flatData.Sample(0.25, 42).Take(5)
+    samples := flatData.Sample(0.5, 42).Take(5).([]int)
     fmt.Println(samples)
     if len(samples) <= 0 {
         t.Errorf("Sample Data error, %v", samples)
@@ -99,7 +99,7 @@ func TestSimpleMappers(t *testing.T) {
             close(yield)
         }()
         return yield
-    }).Collect()
+    }).Collect().([]int)
     fmt.Println(mapPartition)
     if len(mapPartition) != 2*len(d) {
         t.Error("MapPartition data error.")
@@ -111,7 +111,7 @@ func TestKeyValueMappers(t *testing.T) {
     c := NewContext("TestKeyValueMappers")
     fmt.Printf("\n\n%s\n", c)
     defer c.Stop()
-    d := []interface{}{
+    d := []*KeyValue{
         &KeyValue{1, 10},
         &KeyValue{1, 11},
         &KeyValue{2, 12},
@@ -124,7 +124,7 @@ func TestKeyValueMappers(t *testing.T) {
     }[:]
     data := c.Data(d)
 
-    group := data.GroupByKey().CollectAsMap()
+    group := data.GroupByKey().CollectAsMap().(map[int][]int)
     fmt.Println(group)
     for i := 1; i <= 6; i++ {
         if _, ok := group[i]; !ok {
@@ -132,7 +132,7 @@ func TestKeyValueMappers(t *testing.T) {
         }
     }
 
-    pKey := data.PartitionByKey().Collect()
+    pKey := data.PartitionByKey().Collect().([]*KeyValue)
     fmt.Println(pKey)
     if len(pKey) != len(d) {
         t.Error("PartitionByKey data error")
@@ -140,13 +140,13 @@ func TestKeyValueMappers(t *testing.T) {
 
     distinct := data.Map(func(x interface{}) interface{} {
         return x.(*KeyValue).Key
-    }).Distinct().Collect()
+    }).Distinct().Collect().([]int)
     fmt.Println(distinct)
     if len(distinct) != 6 {
         t.Errorf("Distinct data error, %v", distinct)
     }
 
-    countKeys := data.CountByKey()
+    countKeys := data.CountByKey().(map[int]int)
     fmt.Println(countKeys)
     for i := 1; i <= 6; i++ {
         if _, ok := countKeys[i]; !ok {
@@ -160,25 +160,25 @@ func TestSimpleReducer(t *testing.T) {
     c := NewContext("TestSimpleReducer")
     fmt.Printf("\n\n%s\n", c)
     defer c.Stop()
-    d := []interface{}{1, 2, 4, 5, 7, 3, 3, 3, 1}[:]
+    d := []int{1, 2, 4, 5, 7, 3, 3, 3, 1}[:]
     data := c.Data(d)
 
-    sum := data.Reduce(func(x, y interface{}) interface{} {
-        return x.(int) + y.(int)
+    sum := data.Reduce(func(x, y int) int {
+        return x + y
     })
     fmt.Println(sum)
     if sum != 29 {
         t.Error("Reduce function failed.")
     }
 
-    countValues := data.CountByValue()
+    countValues := data.CountByValue().(map[int]int)
     fmt.Println(countValues)
     if len(countValues) <= 0 {
         t.Error("CountByValue data error.")
     }
 
-    data.Foreach(func(x interface{}) {
-        fmt.Println("Happend to found", x.(int))
+    data.Foreach(func(x int) {
+        fmt.Println("Happend to found", x)
     })
 }
 
@@ -187,9 +187,9 @@ func TestUnionRDD(t *testing.T) {
     c := NewContext("TestUnionRDD")
     fmt.Printf("\n\n%s\n", c)
     defer c.Stop()
-    d1 := []interface{}{1, 2, 3, 4, 5}[:]
-    d2 := []interface{}{6, 7, 8, 9, 10}[:]
-    u := c.Data(d1).Union(c.Data(d2)).Collect()
+    d1 := []int{1, 2, 3, 4, 5}[:]
+    d2 := []int{6, 7, 8, 9, 10}[:]
+    u := c.Data(d1).Union(c.Data(d2)).Collect().([]int)
     fmt.Println(u)
     if len(u) != len(d1)+len(d2) {
         t.Error("Union RDD failed.")
@@ -201,24 +201,25 @@ func TestJoins(t *testing.T) {
     c := NewContext("TestJoins")
     fmt.Printf("\n\n%s\n", c)
     defer c.Stop()
-    d1 := []interface{}{
+    d1 := []*KeyValue{
         &KeyValue{1, 10},
         &KeyValue{2, 11},
         &KeyValue{3, 12},
         &KeyValue{5, 13},
         &KeyValue{7, 15},
     }[:]
-    d2 := []interface{}{
-        &KeyValue{1, 100},
-        &KeyValue{2, 111},
-        &KeyValue{5, 131},
-        &KeyValue{6, 161},
+    d2 := []*KeyValue{
+        &KeyValue{1, "a"},
+        &KeyValue{1, "b"},
+        &KeyValue{2, "c"},
+        &KeyValue{5, "d"},
+        &KeyValue{6, "e"},
     }[:]
 
     data1 := c.Data(d1)
     data2 := c.Data(d2)
 
-    join := data1.Join(data2).CollectAsMap()
+    join := data1.Join(data2).CollectAsMap().(map[int][]interface{})
     for key, value := range join {
         fmt.Println(key, value)
     }
@@ -233,7 +234,7 @@ func TestJoins(t *testing.T) {
         }
     }
 
-    leftJoin := data1.LeftOuterJoin(data2).CollectAsMap()
+    leftJoin := data1.LeftOuterJoin(data2).CollectAsMap().(map[int][]interface{})
     for key, value := range leftJoin {
         fmt.Println(key, value)
     }
@@ -243,7 +244,7 @@ func TestJoins(t *testing.T) {
         }
     }
 
-    rightJoin := data1.RightOuterJoin(data2).CollectAsMap()
+    rightJoin := data1.RightOuterJoin(data2).CollectAsMap().(map[int][]interface{})
     for key, value := range rightJoin {
         fmt.Println(key, value)
     }
@@ -259,12 +260,12 @@ func TestCartesian(t *testing.T) {
     c := NewContext("TestCartesian")
     fmt.Printf("\n\n%s\n", c)
     defer c.Stop()
-    d1 := []interface{}{1, 2, 3, 4, 5, 6}[:]
-    d2 := []interface{}{"a", "b", "c", "d", "e"}[:]
+    d1 := []int{1, 2, 3, 4, 5, 6}[:]
+    d2 := []string{"a", "b", "c", "d", "e"}[:]
 
     data1 := c.Data(d1)
     data2 := c.Data(d2)
-    cart := data1.Cartesian(data2).Collect()
+    cart := data1.Cartesian(data2).Collect().([][]interface{})
     fmt.Println(cart)
     if len(cart) != len(d1)*len(d2) {
         t.Error("Cartesian data error.")
@@ -276,7 +277,7 @@ func TestSortByKey(t *testing.T) {
     c := NewContext("TestSortByKey")
     fmt.Printf("\n\n%s\n", c)
     defer c.Stop()
-    d := []interface{}{
+    d := []*KeyValue{
         &KeyValue{1, "a"},
         &KeyValue{4, "b"},
         &KeyValue{6, "c"},
@@ -293,10 +294,10 @@ func TestSortByKey(t *testing.T) {
 
     data := c.Data(d).SortByKey(func(x, y interface{}) bool {
         return x.(int) < y.(int)
-    }, true).Collect()
+    }, true).Collect().([]*KeyValue)
     fmt.Println(data)
-    sorter := NewParkSorter(data, func(x, y interface{}) bool {
-        return x.(*KeyValue).Key.(int) < y.(*KeyValue).Key.(int)
+    sorter := NewParkSorter(data, func(x, y *KeyValue) bool {
+        return x.Key.(int) < y.Key.(int)
     })
     if !sort.IsSorted(sort.Reverse(sorter)) {
         t.Error("SortByKey failed, is not sorted.")
@@ -308,7 +309,7 @@ func TestAccumulator(t *testing.T) {
     c := NewContext("TestAccumulator")
     fmt.Printf("\n\n%s\n", c)
     defer c.Stop()
-    d := []interface{}{1, 2, 3, 5, 6, 7, 8}[:]
+    d := []int{1, 2, 3, 5, 6, 7, 8}[:]
     accu := c.Accumulator(0)
     c.Data(d).Foreach(func(_ interface{}) {
         accu.Add(1)

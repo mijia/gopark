@@ -5,18 +5,17 @@ import (
     "bytes"
     "encoding/gob"
     "fmt"
+    "github.com/mijia/ty"
     "io"
     "io/ioutil"
     "log"
     "math/rand"
     "os"
     "path/filepath"
+    "reflect"
     "sync"
 )
 
-//////////////////////////////////////////////////////
-// Derived RDD operations implementation
-//////////////////////////////////////////////////////
 type _DerivedRDD struct {
     _BaseRDD
     previous RDD
@@ -29,87 +28,84 @@ func (d *_DerivedRDD) init(prevRdd, prototype RDD) {
     d.splits = prevRdd.getSplits()
 }
 
-//////////////////////////////////////////////////////
-// Mapped RDD Impl
-//////////////////////////////////////////////////////
 type _MappedRDD struct {
     _DerivedRDD
-    fn  MapperFunc
+    fn  interface{}
 }
 
 func (m *_MappedRDD) compute(split Split) Yielder {
     yield := make(chan interface{}, 1)
     go func() {
-        log.Printf("Computing <%s> on Split[%d]", m, split.getIndex())
+        parklog("Computing <%s> on Split[%d]", m, split.getIndex())
         for value := range m.previous.traverse(split) {
-            yield <- m.fn(value)
+            chk := ty.Check(new(func(func(ty.A) ty.B, ty.A) ty.B), m.fn, value)
+            vfn, vval := chk.Args[0], chk.Args[1]
+            y := vfn.Call([]reflect.Value{vval})[0]
+            yield <- y.Interface()
         }
         close(yield)
     }()
     return yield
 }
 
-func (m *_MappedRDD) init(rdd RDD, f MapperFunc) {
+func (m *_MappedRDD) init(rdd RDD, fn interface{}) {
     m._DerivedRDD.init(rdd, m)
-    m.fn = f
+    m.fn = fn
 }
 
 func (m *_MappedRDD) String() string {
     return fmt.Sprintf("MappedRDD-%d <%s>", m.id, m._DerivedRDD.previous)
 }
 
-func newMappedRDD(rdd RDD, f MapperFunc) RDD {
+func newMappedRDD(rdd RDD, fn interface{}) RDD {
     mRdd := &_MappedRDD{}
-    mRdd.init(rdd, f)
+    mRdd.init(rdd, fn)
     return mRdd
 }
 
-////////////////////////////////////////////////////////////////////////
-// PartitionMappedRDD Impl
-////////////////////////////////////////////////////////////////////////
 type _PartitionMappedRDD struct {
     _DerivedRDD
-    fn  PartitionMapperFunc
+    fn  interface{}
 }
 
 func (r *_PartitionMappedRDD) compute(split Split) Yielder {
-    log.Printf("Computing <%s> on Split[%d]", r, split.getIndex())
-    return r.fn(r.previous.traverse(split))
+    parklog("Computing <%s> on Split[%d]", r, split.getIndex())
+    yielder := r.previous.traverse(split)
+    chk := ty.Check(new(func(func(ty.A) ty.A, ty.A) ty.A), r.fn, yielder)
+    vfn, vval := chk.Args[0], chk.Args[1]
+    return vfn.Call([]reflect.Value{vval})[0].Interface().(Yielder)
 }
 
-func (r *_PartitionMappedRDD) init(rdd RDD, f PartitionMapperFunc) {
+func (r *_PartitionMappedRDD) init(rdd RDD, fn interface{}) {
     r._DerivedRDD.init(rdd, r)
-    r.fn = f
+    r.fn = fn
 }
 
 func (r *_PartitionMappedRDD) String() string {
     return fmt.Sprintf("PartitionMappedRDD-%d <%s>", r.id, r._DerivedRDD.previous)
 }
 
-func newPartitionMappedRDD(rdd RDD, f PartitionMapperFunc) RDD {
+func newPartitionMappedRDD(rdd RDD, fn interface{}) RDD {
     r := &_PartitionMappedRDD{}
-    r.init(rdd, f)
+    r.init(rdd, fn)
     return r
 }
 
-////////////////////////////////////////////////////////////////////////
-// FlatMappedRDD Impl
-////////////////////////////////////////////////////////////////////////
 type _FlatMappedRDD struct {
     _DerivedRDD
-    fn  FlatMapperFunc
+    fn  interface{}
 }
 
 func (r *_FlatMappedRDD) compute(split Split) Yielder {
     yield := make(chan interface{}, 1)
     go func() {
-        log.Printf("Computing <%s> on Split[%d]", r, split.getIndex())
+        parklog("Computing <%s> on Split[%d]", r, split.getIndex())
         for arg := range r.previous.traverse(split) {
-            value := r.fn(arg)
-            if value != nil && len(value) > 0 {
-                for _, subValue := range value {
-                    yield <- subValue
-                }
+            chk := ty.Check(new(func(func(ty.A) ty.B, ty.A) ty.B), r.fn, arg)
+            vfn, varg := chk.Args[0], chk.Args[1]
+            y := vfn.Call([]reflect.Value{varg})[0]
+            for i := 0; i < y.Len(); i++ {
+                yield <- y.Index(i).Interface()
             }
         }
         close(yield)
@@ -117,35 +113,35 @@ func (r *_FlatMappedRDD) compute(split Split) Yielder {
     return yield
 }
 
-func (r *_FlatMappedRDD) init(rdd RDD, f FlatMapperFunc) {
+func (r *_FlatMappedRDD) init(rdd RDD, fn interface{}) {
     r._DerivedRDD.init(rdd, r)
-    r.fn = f
+    r.fn = fn
 }
 
 func (r *_FlatMappedRDD) String() string {
     return fmt.Sprintf("FlatMappedRDD-%d <%s>", r.id, r._DerivedRDD.previous)
 }
 
-func newFlatMappedRDD(rdd RDD, f FlatMapperFunc) RDD {
+func newFlatMappedRDD(rdd RDD, fn interface{}) RDD {
     r := &_FlatMappedRDD{}
-    r.init(rdd, f)
+    r.init(rdd, fn)
     return r
 }
 
-////////////////////////////////////////////////////////////////////////
-// FilteredRDD Impl
-////////////////////////////////////////////////////////////////////////
 type _FilteredRDD struct {
     _DerivedRDD
-    fn  FilterFunc
+    fn  interface{}
 }
 
 func (r *_FilteredRDD) compute(split Split) Yielder {
     yield := make(chan interface{}, 1)
     go func() {
-        log.Printf("Computing <%s> on Split[%d]", r, split.getIndex())
+        parklog("Computing <%s> on Split[%d]", r, split.getIndex())
         for value := range r.previous.traverse(split) {
-            if r.fn(value) {
+            chk := ty.Check(new(func(func(ty.A) bool, ty.A) bool), r.fn, value)
+            vfn, vval := chk.Args[0], chk.Args[1]
+            ok := vfn.Call([]reflect.Value{vval})[0].Interface().(bool)
+            if ok {
                 yield <- value
             }
         }
@@ -154,24 +150,21 @@ func (r *_FilteredRDD) compute(split Split) Yielder {
     return yield
 }
 
-func (r *_FilteredRDD) init(rdd RDD, f FilterFunc) {
+func (r *_FilteredRDD) init(rdd RDD, fn interface{}) {
     r._DerivedRDD.init(rdd, r)
-    r.fn = f
+    r.fn = fn
 }
 
 func (r *_FilteredRDD) String() string {
     return fmt.Sprintf("FilteredRDD-%d <%s>", r.id, r._DerivedRDD.previous)
 }
 
-func newFilteredRDD(rdd RDD, f FilterFunc) RDD {
+func newFilteredRDD(rdd RDD, fn interface{}) RDD {
     r := &_FilteredRDD{}
-    r.init(rdd, f)
+    r.init(rdd, fn)
     return r
 }
 
-////////////////////////////////////////////////////////////////////////
-// SampledRDD Impl
-////////////////////////////////////////////////////////////////////////
 type _SampledRDD struct {
     _DerivedRDD
     fraction float32
@@ -181,7 +174,7 @@ type _SampledRDD struct {
 func (r *_SampledRDD) compute(split Split) Yielder {
     yield := make(chan interface{}, 1)
     go func() {
-        log.Printf("Computing <%s> on Split[%d]", r, split.getIndex())
+        parklog("Computing <%s> on Split[%d]", r, split.getIndex())
         rd := rand.New(rand.NewSource(r.seed))
         for value := range r.previous.traverse(split) {
             if rd.Float32() <= r.fraction {
@@ -209,11 +202,6 @@ func newSampledRDD(rdd RDD, fraction float32, seed int64) RDD {
     return r
 }
 
-////////////////////////////////////////////////////////////////////////
-// TextFileRDD Impl
-////////////////////////////////////////////////////////////////////////
-const DEFAULT_FILE_SPLIT_SIZE = 64 * 1024 * 1024 // 64MB Split Size
-
 type _PartialSplit struct {
     index int
     begin int64
@@ -231,10 +219,12 @@ type _TextFileRDD struct {
     splitSize int64
 }
 
+const DEFAULT_FILE_SPLIT_SIZE = 64 * 1024 * 1024 // 64MB Split Size
+
 func (t *_TextFileRDD) compute(split Split) Yielder {
     yield := make(chan interface{}, 100)
     go func() {
-        log.Printf("Computing <%s> on Split[%d]", t, split.getIndex())
+        parklog("Computing <%s> on Split[%d]", t, split.getIndex())
         defer close(yield)
 
         f, err := os.Open(t.path)
@@ -314,9 +304,6 @@ func newTextFileRDD(ctx *Context, path string) RDD {
     return textRdd
 }
 
-////////////////////////////////////////////////////////////////////////
-// ShuffledRDD Impl
-////////////////////////////////////////////////////////////////////////
 type _ShuffledSplit struct {
     index int
 }
@@ -329,16 +316,16 @@ type _ShuffledRDD struct {
     _BaseRDD
     shuffleId   int64
     parent      RDD
-    aggregator  *_Aggregator
+    aggregator  *Aggregator
     partitioner Partitioner
     numParts    int
     shuffleJob  sync.Once
 }
 
-type _ShuffleBucket map[interface{}][]interface{}
+type _ShuffleBucket map[interface{}]interface{}
 
 func (r *_ShuffledRDD) compute(split Split) Yielder {
-    log.Printf("Computing <%s> on Split[%d]", r, split.getIndex())
+    parklog("Computing <%s> on Split[%d]", r, split.getIndex())
     r.shuffleJob.Do(func() {
         r.runShuffleJob()
     })
@@ -351,7 +338,7 @@ func (r *_ShuffledRDD) compute(split Split) Yielder {
         bucketChan[i] = make(chan _ShuffleBucket)
         go func(inputId int, bchan chan _ShuffleBucket) {
             pathName := env.getLocalShufflePath(r.shuffleId, inputId, outputId)
-            log.Printf("Decoding shuffle-%d[GOB] from local file %s", r.shuffleId, pathName)
+            parklog("Decoding shuffle-%d[GOB] from local file %s", r.shuffleId, pathName)
             var bucket _ShuffleBucket
             bs, err := ioutil.ReadFile(pathName)
             if err != nil {
@@ -389,7 +376,7 @@ func (r *_ShuffledRDD) compute(split Split) Yielder {
 }
 
 func (r *_ShuffledRDD) runShuffleJob() {
-    log.Printf("Computing shuffle stage for <%s>", r)
+    parklog("Computing shuffle stage for <%s>", r)
     iters := r.ctx.runRoutine(r.parent, nil, func(yield Yielder, partition int) interface{} {
         numSplits := r.partitioner.numPartitions()
         buckets := make([]_ShuffleBucket, numSplits)
@@ -415,7 +402,7 @@ func (r *_ShuffledRDD) runShuffleJob() {
             if err := ioutil.WriteFile(pathName, buffer.Bytes(), 0644); err != nil {
                 panic(err)
             }
-            log.Printf("Encoding shuffle-%d[GOB] into local file %s", r.shuffleId, pathName)
+            parklog("Encoding shuffle-%d[GOB] into local file %s", r.shuffleId, pathName)
         }
         return struct{}{}
     })
@@ -424,10 +411,10 @@ func (r *_ShuffledRDD) runShuffleJob() {
             // we need to dump the yielders that returns to finish up the routine
         }
     }
-    log.Printf("Shuffling DONE for <%s>", r)
+    parklog("Shuffling DONE for <%s>", r)
 }
 
-func (r *_ShuffledRDD) init(rdd RDD, aggregator *_Aggregator, partitioner Partitioner) {
+func (r *_ShuffledRDD) init(rdd RDD, aggregator *Aggregator, partitioner Partitioner) {
     r._BaseRDD.init(rdd.getContext(), r)
     r.shuffleId = r._BaseRDD.newShuffleId()
     r.parent = rdd
@@ -446,15 +433,12 @@ func (r *_ShuffledRDD) String() string {
     return fmt.Sprintf("ShuffledRDD-%d <%s %d>", r.id, r.parent, r.length)
 }
 
-func newShuffledRDD(rdd RDD, aggregator *_Aggregator, partitioner Partitioner) RDD {
+func newShuffledRDD(rdd RDD, aggregator *Aggregator, partitioner Partitioner) RDD {
     r := &_ShuffledRDD{}
     r.init(rdd, aggregator, partitioner)
     return r
 }
 
-////////////////////////////////////////////////////////////////////////
-// OutputTextFileRDD Impl
-////////////////////////////////////////////////////////////////////////
 type _OutputTextFileRDD struct {
     _DerivedRDD
     pathname string
@@ -463,7 +447,7 @@ type _OutputTextFileRDD struct {
 func (r *_OutputTextFileRDD) compute(split Split) Yielder {
     yield := make(chan interface{}, 1)
     go func() {
-        log.Printf("Saving <%s> on Split[%d]", r, split.getIndex())
+        parklog("Saving <%s> on Split[%d]", r, split.getIndex())
         pathName := filepath.Join(r.pathname, fmt.Sprintf("%05d", split.getIndex()))
         outputFile, err := os.Create(pathName)
         if err != nil {
@@ -525,12 +509,10 @@ func newOutputTextFileRDD(rdd RDD, pathname string) RDD {
     return r
 }
 
-////////////////////////////////////////////////////////////////////////
-// Parallelize DataRDD Impl
-////////////////////////////////////////////////////////////////////////
 type _DataSplit struct {
-    index  int
-    values []interface{}
+    index int
+    begin int
+    end   int
 }
 
 func (s *_DataSplit) getIndex() int {
@@ -540,45 +522,55 @@ func (s *_DataSplit) getIndex() int {
 type _DataRDD struct {
     _BaseRDD
     size int
+    data reflect.Value
 }
 
 func (r *_DataRDD) compute(split Split) Yielder {
     yield := make(chan interface{}, 1)
     go func() {
-        log.Printf("Computing <%s> on Split[%d]", r, split.getIndex())
+        parklog("Computing <%s> on Split[%d]", r, split.getIndex())
         dSplit := split.(*_DataSplit)
-        for _, value := range dSplit.values {
-            yield <- value
+        for i := dSplit.begin; i < dSplit.end; i++ {
+            yield <- r.data.Index(i).Interface()
         }
         close(yield)
     }()
     return yield
 }
 
-func (r *_DataRDD) init(ctx *Context, data []interface{}, numPartitions int) {
-    r._BaseRDD.init(ctx, r)
-    r.size = len(data)
-    if r.size <= 0 {
-        panic(fmt.Errorf("Please don't provide an empty data array."))
-    }
-    if numPartitions <= 0 {
-        numPartitions = 1
-    }
-    if r.size < numPartitions {
-        numPartitions = r.size
-    }
-    splitSize := r.size / numPartitions
-    r.length = numPartitions
-    r.splits = make([]Split, numPartitions)
-    for i := 0; i < numPartitions; i++ {
-        end := splitSize*i + splitSize
-        if i == numPartitions-1 {
-            end = r.size
+func (r *_DataRDD) init(ctx *Context, data interface{}, numPartitions int) {
+    switch reflect.TypeOf(data).Kind() {
+    case reflect.Slice:
+        dataValue := reflect.ValueOf(data)
+
+        r._BaseRDD.init(ctx, r)
+        r.data = dataValue
+        r.size = dataValue.Len()
+        if r.size <= 0 {
+            log.Panic("Please don't provide an empty data array.")
         }
-        r.splits[i] = &_DataSplit{
-            index:  i,
-            values: data[splitSize*i : end],
+        if numPartitions <= 0 {
+            numPartitions = 1
         }
+        if r.size < numPartitions {
+            numPartitions = r.size
+        }
+        splitSize := r.size / numPartitions
+        r.length = numPartitions
+        r.splits = make([]Split, numPartitions)
+        for i := 0; i < numPartitions; i++ {
+            end := splitSize*i + splitSize
+            if i == numPartitions-1 {
+                end = r.size
+            }
+            r.splits[i] = &_DataSplit{
+                index: i,
+                begin: splitSize * i,
+                end:   end,
+            }
+        }
+    default:
+        log.Panicf("Please provide a slice of data instead of a %s", reflect.TypeOf(data))
     }
 }
 
@@ -586,19 +578,16 @@ func (r *_DataRDD) String() string {
     return fmt.Sprintf("DataRDD-%d <size=%d>", r.id, r.size)
 }
 
-func newDataRDD(ctx *Context, data []interface{}) RDD {
+func newDataRDD(ctx *Context, data interface{}) RDD {
     return newDataRDD_N(ctx, data, env.parallel)
 }
 
-func newDataRDD_N(ctx *Context, data []interface{}, numPartitions int) RDD {
+func newDataRDD_N(ctx *Context, data interface{}, numPartitions int) RDD {
     r := &_DataRDD{}
     r.init(ctx, data, numPartitions)
     return r
 }
 
-////////////////////////////////////////////////////////////////////////
-// UnionRDD impl
-////////////////////////////////////////////////////////////////////////
 type _UnionSplit struct {
     index int
     rdd   RDD
@@ -618,7 +607,7 @@ type _UnionRDD struct {
 func (r *_UnionRDD) compute(split Split) Yielder {
     yield := make(chan interface{}, 1)
     go func() {
-        log.Printf("Computing <%s> on Split[%d]", r, split.getIndex())
+        parklog("Computing <%s> on Split[%d]", r, split.getIndex())
         unionSplit := split.(*_UnionSplit)
         for value := range unionSplit.rdd.traverse(unionSplit.split) {
             yield <- value
@@ -659,9 +648,6 @@ func newUnionRDD(ctx *Context, rdds []RDD) RDD {
     return r
 }
 
-////////////////////////////////////////////////////////////////////////
-// CoGroupedRDD impl
-////////////////////////////////////////////////////////////////////////
 type _CoGroupedRDD struct {
     _BaseRDD
     size int
@@ -671,21 +657,32 @@ type _CoGroupedRDD struct {
 func (r *_CoGroupedRDD) compute(split Split) Yielder {
     yield := make(chan interface{}, 1)
     go func() {
-        log.Printf("Computing <%s> on Split[%d]", r, split.getIndex())
-        keyGroups := make(map[interface{}][][]interface{})
+        parklog("Computing <%s> on Split[%d]", r, split.getIndex())
+        var keyGroups reflect.Value
         for groupIndex, rdd := range r.rdds {
             for value := range rdd.traverse(split) {
                 keyValue := value.(*KeyValue)
-                if _, ok := keyGroups[keyValue.Key]; !ok {
-                    keyGroups[keyValue.Key] = make([][]interface{}, r.size)
+                vkey, vval := reflect.ValueOf(keyValue.Key), reflect.ValueOf(keyValue.Value)
+                if !keyGroups.IsValid() {
+                    empty := make([]interface{}, 0)
+                    keyGroups = reflect.MakeMap(reflect.MapOf(vkey.Type(), reflect.TypeOf(empty)))
                 }
-                keyGroups[keyValue.Key][groupIndex] = keyValue.Value.([]interface{})
+                if containValue := keyGroups.MapIndex(vkey); containValue.IsValid() {
+                    containValue.Index(groupIndex).Set(vval)
+                    keyGroups.SetMapIndex(vkey, containValue)
+                } else {
+                    groups := make([]interface{}, r.size)
+                    groups[groupIndex] = keyValue.Value
+                    keyGroups.SetMapIndex(vkey, reflect.ValueOf(groups))
+                }
             }
         }
-        for key, groups := range keyGroups {
-            yield <- &KeyGroups{
-                Key:    key,
-                Groups: groups,
+        if keyGroups.IsValid() {
+            for _, key := range keyGroups.MapKeys() {
+                yield <- &KeyValue{
+                    Key:   key.Interface(),
+                    Value: keyGroups.MapIndex(key).Interface(),
+                }
             }
         }
         close(yield)
@@ -717,9 +714,6 @@ func newCoGroupedRDD(ctx *Context, rdds []RDD, numPartitions int) RDD {
     return r
 }
 
-////////////////////////////////////////////////////////////////////////
-// CartesianRDD Impl
-////////////////////////////////////////////////////////////////////////
 type _CartesianSplit struct {
     index  int
     split1 Split
@@ -738,19 +732,32 @@ type _CartesianRDD struct {
 
 func (r *_CartesianRDD) compute(split Split) Yielder {
     yield := make(chan interface{}, 1)
+    getContainer := func(i, j interface{}) interface{} {
+        vi, vj := reflect.ValueOf(i), reflect.ValueOf(j)
+        var container reflect.Value
+        if vi.Type() != vj.Type() {
+            empty := make([]interface{}, 0)
+            container = reflect.MakeSlice(reflect.TypeOf(empty), 2, 2)
+        } else {
+            container = reflect.MakeSlice(reflect.SliceOf(vi.Type()), 2, 2)
+        }
+        container.Index(0).Set(vi)
+        container.Index(1).Set(vj)
+        return container.Interface()
+    }
     go func() {
-        log.Printf("Computing <%s> on Split[%d]", r, split.getIndex())
+        parklog("Computing <%s> on Split[%d]", r, split.getIndex())
         cSplit := split.(*_CartesianSplit)
         rightYields := make([]interface{}, 0)
         for i := range r.rdd1.traverse(cSplit.split1) {
             if len(rightYields) == 0 {
                 for j := range r.rdd2.traverse(cSplit.split2) {
-                    yield <- []interface{}{i, j}[:]
+                    yield <- getContainer(i, j)
                     rightYields = append(rightYields, j)
                 }
             } else {
                 for _, j := range rightYields {
-                    yield <- []interface{}{i, j}[:]
+                    yield <- getContainer(i, j)
                 }
             }
         }

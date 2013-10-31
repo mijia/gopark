@@ -1,6 +1,7 @@
 package main
 
 import (
+    "encoding/gob"
     "fmt"
     "github.com/mijia/gopark"
     "math"
@@ -11,7 +12,7 @@ import (
 
 func main() {
     gopark.ParseOptions()
-    c := gopark.NewContext("testflight")
+    c := gopark.NewContext("Demo")
     defer c.Stop()
 
     WordCount(c)
@@ -21,38 +22,36 @@ func main() {
 
 func WordCount(c *gopark.Context) {
     txt := c.TextFile("../")
-    counts := txt.FlatMap(func(line interface{}) []interface{} {
-        vs := strings.Fields(line.(string))
-        words := make([]interface{}, len(vs))
+    counts := txt.FlatMap(func(line string) []string {
+        vs := strings.Fields(line)
+        words := make([]string, len(vs))
         for i := range vs {
             words[i] = vs[i]
         }
         return words
-    }).Map(func(x interface{}) interface{} {
+    }).Map(func(x string) *gopark.KeyValue {
         return &gopark.KeyValue{x, 1}
-    }).ReduceByKey(func(x, y interface{}) interface{} {
-        return x.(int) + y.(int)
+    }).ReduceByKey(func(x, y int) int {
+        return x + y
     }).Cache()
 
     fmt.Println(
-        counts.Filter(func(x interface{}) bool {
-            return x.(*gopark.KeyValue).Value.(int) > 50
-        }).CollectAsMap())
+        counts.Filter(func(x *gopark.KeyValue) bool {
+            return x.Value.(int) > 50
+        }).CollectAsMap().(map[string]int))
 
     fmt.Println(
-        counts.Filter(func(x interface{}) bool {
-            return x.(*gopark.KeyValue).Value.(int) > 50
-        }).Map(func(x interface{}) interface{} {
-            keyValue := x.(*gopark.KeyValue)
+        counts.Filter(func(x *gopark.KeyValue) bool {
+            return x.Value.(int) > 50
+        }).Map(func(keyValue *gopark.KeyValue) *gopark.KeyValue {
             keyValue.Key, keyValue.Value = keyValue.Value, keyValue.Key
             return keyValue
-        }).GroupByKey().Collect())
+        }).GroupByKey().Collect().([]*gopark.KeyValue))
 }
 
 func ComputePi(c *gopark.Context) {
     N := 100000
-    iters := c.Data(make([]interface{}, N))
-    count := iters.Map(func(_ interface{}) interface{} {
+    count := c.Data(gopark.Range(0, N)).Map(func(_ int) int {
         x := rand.Float32()
         y := rand.Float32()
         if x*x+y*y < 1 {
@@ -60,26 +59,27 @@ func ComputePi(c *gopark.Context) {
         } else {
             return 0
         }
-    }).Reduce(func(x, y interface{}) interface{} {
-        return x.(int) + y.(int)
+    }).Reduce(func(x, y int) int {
+        return x + y
     }).(int)
     fmt.Println("Pi =", (4.0 * float64(count) / float64(N)))
 }
 
 func LogisticRegression(c *gopark.Context) {
-    type dataPoint struct {
-        x   gopark.Vector
-        y   float64
+    type DataPoint struct {
+        X   gopark.Vector
+        Y   float64
     }
+    gob.Register(new(DataPoint))
 
-    points := c.TextFile("points.txt").Map(func(line interface{}) interface{} {
-        vs := strings.Fields(line.(string))
+    points := c.TextFile("points.txt").Map(func(line string) *DataPoint {
+        vs := strings.Fields(line)
         vector := make(gopark.Vector, len(vs)-1)
         for i := 0; i < len(vs)-1; i++ {
             vector[i], _ = strconv.ParseFloat(vs[i], 64)
         }
         y, _ := strconv.ParseFloat(vs[len(vs)-1], 64)
-        return &dataPoint{vector, y}
+        return &DataPoint{vector, y}
     }).Cache()
 
     hx := func(w, x gopark.Vector, y float64) float64 {
@@ -87,11 +87,10 @@ func LogisticRegression(c *gopark.Context) {
     }
     var w gopark.Vector = []float64{1, -10}[:]
     for i := 0; i < 10; i++ {
-        gradient := points.Map(func(x interface{}) interface{} {
-            p := x.(*dataPoint)
-            return p.x.Multiply(-1 * hx(w, p.x, p.y))
-        }).Reduce(func(x, y interface{}) interface{} {
-            return x.(gopark.Vector).Plus(y.(gopark.Vector))
+        gradient := points.Map(func(p *DataPoint) gopark.Vector {
+            return p.X.Multiply(-1 * hx(w, p.X, p.Y))
+        }).Reduce(func(x, y gopark.Vector) gopark.Vector {
+            return x.Plus(y)
         }).(gopark.Vector)
         w = w.Minus(gradient)
     }

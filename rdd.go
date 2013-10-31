@@ -4,54 +4,49 @@ import (
     "bytes"
     "encoding/gob"
     "fmt"
+    "github.com/mijia/ty"
     "io/ioutil"
     "log"
+    "reflect"
     "sort"
 )
 
-type MapperFunc func(interface{}) interface{}
-type PartitionMapperFunc func(Yielder) Yielder
-type FlatMapperFunc func(interface{}) []interface{}
-type ReducerFunc func(interface{}, interface{}) interface{}
-type FilterFunc func(interface{}) bool
-type LoopFunc func(interface{})
-
 type RDD interface {
-    Map(f MapperFunc) RDD
-    MapPartition(f PartitionMapperFunc) RDD
-    FlatMap(f FlatMapperFunc) RDD
-    Filter(f FilterFunc) RDD
+    Map(fn interface{}) RDD
+    MapPartition(fn interface{}) RDD
+    FlatMap(fn interface{}) RDD
+    Filter(fn interface{}) RDD
     Sample(fraction float32, seed int64) RDD
     GroupByKey() RDD
-    SortByKey(fn KeyLessFunc, reverse bool) RDD
     PartitionByKey() RDD
-    ReduceByKey(fn ReducerFunc) RDD
+    ReduceByKey(fn interface{}) RDD
     Distinct() RDD
-    Union(other RDD) RDD
+    SortByKey(fn interface{}, reverse bool) RDD
     Join(other RDD) RDD
     LeftOuterJoin(other RDD) RDD
     RightOuterJoin(other RDD) RDD
     GroupWith(other RDD) RDD
+    Union(other RDD) RDD
     Cartesian(other RDD) RDD
 
     GroupByKey_N(numPartitions int) RDD
-    SortByKey_N(fn KeyLessFunc, reverse bool, numPartitions int) RDD
     PartitionByKey_N(numPartitions int) RDD
-    ReduceByKey_N(fn ReducerFunc, numPartitions int) RDD
+    ReduceByKey_N(fn interface{}, numPartitions int) RDD
     Distinct_N(numPartitions int) RDD
+    SortByKey_N(fn interface{}, reverse bool, numPartitions int) RDD
     Join_N(other RDD, numPartitions int) RDD
     LeftOuterJoin_N(other RDD, numPartitions int) RDD
     RightOuterJoin_N(other RDD, numPartitions int) RDD
     GroupWith_N(other RDD, numPartitions int) RDD
 
-    Reduce(fn ReducerFunc) interface{}
-    CountByKey() map[interface{}]int64
-    CountByValue() map[interface{}]int64
-    Take(n int64) []interface{}
-    Collect() []interface{}
-    CollectAsMap() map[interface{}]interface{}
-    Count() int64
-    Foreach(fn LoopFunc)
+    Reduce(fn interface{}) interface{}
+    CountByKey() interface{}
+    CountByValue() interface{}
+    Take(n int) interface{}
+    Collect() interface{}
+    CollectAsMap() interface{}
+    Count() int
+    Foreach(fn interface{})
     SaveAsTextFile(pathname string)
 
     Cache() RDD
@@ -82,9 +77,6 @@ type _BaseRDD struct {
     length          int
 }
 
-//////////////////////////////////////////////////////
-// Base RDD operations implementation
-//////////////////////////////////////////////////////
 func (r *_BaseRDD) Cache() RDD {
     if !r.shouldCache {
         r.shouldCache = true
@@ -130,27 +122,27 @@ func (r *_BaseRDD) RightOuterJoin_N(other RDD, numPartitions int) RDD {
 }
 
 func (r *_BaseRDD) join(other RDD, numPartitions int, needLeft, needRight bool) RDD {
-    return r.GroupWith_N(other, numPartitions).FlatMap(func(x interface{}) []interface{} {
-        keyGroups := x.(*KeyGroups)
-        groups := keyGroups.Groups
-        if needLeft && len(groups[0]) == 0 {
+    return r.GroupWith_N(other, numPartitions).FlatMap(func(x *KeyValue) []*KeyValue {
+        groups := x.Value.([]interface{})
+        vg1, vg2 := reflect.ValueOf(groups[0]), reflect.ValueOf(groups[1])
+        if needLeft && (!vg1.IsValid() || vg1.Len() == 0) {
             return nil
         }
-        if needRight && len(groups[1]) == 0 {
+        if needRight && (!vg2.IsValid() || vg2.Len() == 0) {
             return nil
         }
-        results := make([]interface{}, 0)
-        if len(groups[0]) == 0 {
-            groups[0] = append(groups[0], nil)
+        results := make([]*KeyValue, 0)
+        if !vg1.IsValid() || vg1.Len() == 0 {
+            vg1 = reflect.ValueOf([]interface{}{nil}[:])
         }
-        if len(groups[1]) == 0 {
-            groups[1] = append(groups[1], nil)
+        if !vg2.IsValid() || vg2.Len() == 0 {
+            vg2 = reflect.ValueOf([]interface{}{nil}[:])
         }
-        for _, leftValue := range groups[0] {
-            for _, rightValue := range groups[1] {
+        for i := 0; i < vg1.Len(); i++ {
+            for j := 0; j < vg2.Len(); j++ {
                 results = append(results, &KeyValue{
-                    Key:   keyGroups.Key,
-                    Value: []interface{}{leftValue, rightValue}[:],
+                    Key:   x.Key,
+                    Value: []interface{}{vg1.Index(i).Interface(), vg2.Index(j).Interface()}[:],
                 })
             }
         }
@@ -175,11 +167,11 @@ func (r *_BaseRDD) GroupWith_N(other RDD, numPartitions int) RDD {
     return newCoGroupedRDD(r.ctx, rdds, numPartitions)
 }
 
-func (r *_BaseRDD) SortByKey(fn KeyLessFunc, reverse bool) RDD {
+func (r *_BaseRDD) SortByKey(fn interface{}, reverse bool) RDD {
     return r.SortByKey_N(fn, reverse, 0)
 }
 
-func (r *_BaseRDD) SortByKey_N(fn KeyLessFunc, reverse bool, numPartitions int) RDD {
+func (r *_BaseRDD) SortByKey_N(fn interface{}, reverse bool, numPartitions int) RDD {
     if numPartitions <= 0 {
         switch {
         case env.parallel == 0:
@@ -188,9 +180,12 @@ func (r *_BaseRDD) SortByKey_N(fn KeyLessFunc, reverse bool, numPartitions int) 
             numPartitions = env.parallel
         }
     }
-    sortMapper := func(list []interface{}) []interface{} {
-        sorter := NewParkSorter(list, func(x, y interface{}) bool {
-            return fn(x.(*KeyValue).Key, y.(*KeyValue).Key)
+    sortMapper := func(list []*KeyValue) []*KeyValue {
+        sorter := NewParkSorter(list, func(x, y *KeyValue) bool {
+            xkey, ykey := x.Key, y.Key
+            chk := ty.Check(new(func(func(ty.A, ty.A) bool, ty.A, ty.A) bool), fn, xkey, ykey)
+            vfn, vxkey, vykey := chk.Args[0], chk.Args[1], chk.Args[2]
+            return vfn.Call([]reflect.Value{vxkey, vykey})[0].Interface().(bool)
         })
         if !reverse {
             sort.Sort(sorter)
@@ -202,9 +197,9 @@ func (r *_BaseRDD) SortByKey_N(fn KeyLessFunc, reverse bool, numPartitions int) 
     goSortMapper := func(iter Yielder) Yielder {
         yield := make(chan interface{}, 1)
         go func() {
-            values := make([]interface{}, 0)
+            values := make([]*KeyValue, 0)
             for value := range iter {
-                values = append(values, value)
+                values = append(values, value.(*KeyValue))
             }
             sorted := sortMapper(values)
             for _, value := range sorted {
@@ -234,26 +229,25 @@ func (r *_BaseRDD) SortByKey_N(fn KeyLessFunc, reverse bool, numPartitions int) 
             close(yield)
         }()
         return yield
-    }).Collect()
+    }).Collect().([]*KeyValue)
     samples = sortMapper(samples)
     keys := make([]interface{}, 0)
     for i := 0; i < numPartitions-1; i++ {
         if i*10+5 >= len(samples) {
             break
         }
-        keys = append(keys, samples[i*10+5].(*KeyValue).Key)
+        keys = append(keys, samples[i*10+5].Key)
     }
     partitioner := newRangePartitioner(fn, keys, reverse)
     aggregator := newMergeAggregator()
     shuffleRdd := newShuffledRDD(r.prototype, aggregator, partitioner)
-    return shuffleRdd.FlatMap(func(x interface{}) []interface{} {
-        keyValue := x.(*KeyValue)
-        values := keyValue.Value.([]interface{})
-        results := make([]interface{}, len(values))
-        for i := range values {
+    return shuffleRdd.FlatMap(func(keyValue *KeyValue) []*KeyValue {
+        values := reflect.ValueOf(keyValue.Value)
+        results := make([]*KeyValue, values.Len())
+        for i := 0; i < values.Len(); i++ {
             results[i] = &KeyValue{
                 Key:   keyValue.Key,
-                Value: values[i],
+                Value: values.Index(i).Interface(),
             }
         }
         return results
@@ -269,38 +263,36 @@ func (r *_BaseRDD) Distinct() RDD {
 }
 
 func (r *_BaseRDD) Distinct_N(numPartitions int) RDD {
-    d := r.Map(func(arg interface{}) interface{} {
-        return &KeyValue{arg, nil}
+    d := r.Map(func(arg interface{}) *KeyValue {
+        return &KeyValue{arg, 1}
     }).ReduceByKey_N(func(x, y interface{}) interface{} {
-        return nil
-    }, numPartitions).Map(func(arg interface{}) interface{} {
-        return arg.(*KeyValue).Key
+        return 1
+    }, numPartitions).Map(func(arg *KeyValue) interface{} {
+        return arg.Key
     })
     return d
 }
 
-func (r *_BaseRDD) ReduceByKey(fn ReducerFunc) RDD {
+func (r *_BaseRDD) ReduceByKey(fn interface{}) RDD {
     return r.ReduceByKey_N(fn, 0)
 }
 
-func (r *_BaseRDD) ReduceByKey_N(fn ReducerFunc, numPartitions int) RDD {
-    combinerCreator := func(x interface{}) []interface{} {
-        y := []interface{}{x}[:]
-        return y
-    }
-    combinderMerger := func(x, y []interface{}) []interface{} {
-        x[0] = fn(x[0], y[0])
+func (r *_BaseRDD) ReduceByKey_N(fn interface{}, numPartitions int) RDD {
+    combinerCreator := func(x interface{}) interface{} {
         return x
     }
-    valueMerger := func(x []interface{}, y interface{}) []interface{} {
-        x[0] = fn(x[0], y)
-        return x
+    combinderMerger := func(x, y interface{}) interface{} {
+        chk := ty.Check(new(func(func(ty.A, ty.A) ty.A, ty.A, ty.A) ty.A), fn, x, y)
+        vfn, vx, vy := chk.Args[0], chk.Args[1], chk.Args[2]
+        return vfn.Call([]reflect.Value{vx, vy})[0].Interface()
     }
-    aggregator := &_Aggregator{combinerCreator, combinderMerger, valueMerger}
-    return r.combineByKey(aggregator, numPartitions).Map(func(x interface{}) interface{} {
-        keyValue := x.(*KeyValue)
-        return &KeyValue{keyValue.Key, keyValue.Value.([]interface{})[0]}
-    })
+    valueMerger := func(x interface{}, y interface{}) interface{} {
+        chk := ty.Check(new(func(func(ty.A, ty.A) ty.A, ty.A, ty.A) ty.A), fn, x, y)
+        vfn, vx, vy := chk.Args[0], chk.Args[1], chk.Args[2]
+        return vfn.Call([]reflect.Value{vx, vy})[0].Interface()
+    }
+    aggregator := &Aggregator{combinerCreator, combinderMerger, valueMerger}
+    return r.combineByKey(aggregator, numPartitions)
 }
 
 func (r *_BaseRDD) PartitionByKey() RDD {
@@ -308,16 +300,19 @@ func (r *_BaseRDD) PartitionByKey() RDD {
 }
 
 func (r *_BaseRDD) PartitionByKey_N(numPartitions int) RDD {
-    return r.GroupByKey_N(numPartitions).Map(func(arg interface{}) interface{} {
-        keyValue := arg.(*KeyValue)
-        values := keyValue.Value.([]interface{})
-        results := make([]interface{}, len(values))
-        for i := range values {
-            results[i] = &KeyValue{keyValue.Key, values[i]}
+    return r.GroupByKey_N(numPartitions).FlatMap(func(arg *KeyValue) []*KeyValue {
+        vvals := reflect.ValueOf(arg.Value)
+        if vvals.IsValid() && vvals.Kind() == reflect.Slice {
+            results := make([]*KeyValue, vvals.Len())
+            for i := 0; i < vvals.Len(); i++ {
+                results[i] = &KeyValue{
+                    Key:   arg.Key,
+                    Value: vvals.Index(i).Interface(),
+                }
+            }
+            return results
         }
-        return results
-    }).FlatMap(func(arg interface{}) []interface{} {
-        return arg.([]interface{})
+        return []*KeyValue{}
     })
 }
 
@@ -330,127 +325,161 @@ func (r *_BaseRDD) GroupByKey_N(numPartitions int) RDD {
     return r.combineByKey(aggregator, numPartitions)
 }
 
-func (r *_BaseRDD) Map(f MapperFunc) RDD {
-    return newMappedRDD(r.prototype, f)
+func (r *_BaseRDD) Map(fn interface{}) RDD {
+    return newMappedRDD(r.prototype, fn)
 }
 
-func (r *_BaseRDD) MapPartition(f PartitionMapperFunc) RDD {
-    return newPartitionMappedRDD(r.prototype, f)
+func (r *_BaseRDD) MapPartition(fn interface{}) RDD {
+    return newPartitionMappedRDD(r.prototype, fn)
 }
 
-func (r *_BaseRDD) FlatMap(f FlatMapperFunc) RDD {
-    return newFlatMappedRDD(r.prototype, f)
+func (r *_BaseRDD) FlatMap(fn interface{}) RDD {
+    return newFlatMappedRDD(r.prototype, fn)
 }
 
-func (r *_BaseRDD) Filter(f FilterFunc) RDD {
-    return newFilteredRDD(r.prototype, f)
+func (r *_BaseRDD) Filter(fn interface{}) RDD {
+    return newFilteredRDD(r.prototype, fn)
 }
 
 func (r *_BaseRDD) Sample(fraction float32, seed int64) RDD {
     return newSampledRDD(r.prototype, fraction, seed)
 }
 
-func (r *_BaseRDD) CountByKey() map[interface{}]int64 {
-    return r.Map(func(arg interface{}) interface{} {
-        return arg.(*KeyValue).Key
+func (r *_BaseRDD) CountByKey() interface{} {
+    return r.Map(func(arg *KeyValue) interface{} {
+        return arg.Key
     }).CountByValue()
 }
 
-func (r *_BaseRDD) CountByValue() map[interface{}]int64 {
-    log.Printf("<CountByValue> %s", r.prototype)
+func (r *_BaseRDD) CountByValue() interface{} {
+    parklog("<CountByValue> %s", r.prototype)
+    var cnts reflect.Value
     iters := r.ctx.runRoutine(r.prototype, nil, func(yield Yielder, partition int) interface{} {
-        cnts := make(map[interface{}]int64)
+        var localCnts reflect.Value
         for value := range yield {
-            if _, ok := cnts[value]; ok {
-                cnts[value]++
+            vval := reflect.ValueOf(value)
+            if !cnts.IsValid() {
+                cnts = reflect.MakeMap(reflect.MapOf(vval.Type(), reflect.TypeOf(1)))
+            }
+            if !localCnts.IsValid() {
+                localCnts = reflect.MakeMap(reflect.MapOf(vval.Type(), reflect.TypeOf(1)))
+            }
+            if cValue := localCnts.MapIndex(vval); cValue.IsValid() {
+                localCnts.SetMapIndex(vval, reflect.ValueOf(cValue.Interface().(int)+1))
             } else {
-                cnts[value] = 1
+                localCnts.SetMapIndex(vval, reflect.ValueOf(1))
             }
         }
-        return cnts
+        return localCnts
     })
-    cnts := make(map[interface{}]int64)
     for _, iter := range iters {
         for value := range iter {
-            for key, cnt := range value.(map[interface{}]int64) {
-                if _, ok := cnts[key]; ok {
-                    cnts[key] += cnt
+            vval := value.(reflect.Value)
+            for _, key := range vval.MapKeys() {
+                if cValue := cnts.MapIndex(key); cValue.IsValid() {
+                    cnts.SetMapIndex(key, reflect.ValueOf(cValue.Interface().(int)+vval.MapIndex(key).Interface().(int)))
                 } else {
-                    cnts[key] = cnt
+                    cnts.SetMapIndex(key, vval.MapIndex(key))
                 }
             }
         }
     }
-    return cnts
+    if cnts.IsValid() {
+        return cnts.Interface()
+    }
+    return nil
 }
 
-func (r *_BaseRDD) Reduce(fn ReducerFunc) interface{} {
-    log.Printf("<Reduce> %s", r.prototype)
+func (r *_BaseRDD) Reduce(fn interface{}) interface{} {
+    parklog("<Reduce> %s", r.prototype)
     iters := r.ctx.runRoutine(r.prototype, nil, func(yield Yielder, partition int) interface{} {
-        var accu interface{} = nil
+        var accu reflect.Value
         for value := range yield {
             switch {
-            case accu == nil:
-                accu = value
+            case !accu.IsValid():
+                accu = reflect.ValueOf(value)
             default:
-                accu = fn(accu, value)
+                chk := ty.Check(new(func(func(ty.A, ty.A) ty.A, ty.A, ty.A) ty.A), fn, accu.Interface(), value)
+                vfn, vval := chk.Args[0], chk.Args[2]
+                accu = vfn.Call([]reflect.Value{accu, vval})[0]
             }
         }
-        return accu
+        return accu.Interface()
     })
-    var accu interface{} = nil
+    var accu reflect.Value
     for _, iter := range iters {
         for value := range iter {
-            if value != nil {
-                switch {
-                case accu == nil:
-                    accu = value
-                default:
-                    accu = fn(accu, value)
-                }
+            switch {
+            case !accu.IsValid():
+                accu = reflect.ValueOf(value)
+            default:
+                chk := ty.Check(new(func(func(ty.A, ty.A) ty.A, ty.A, ty.A) ty.A), fn, accu.Interface(), value)
+                vfn, vval := chk.Args[0], chk.Args[2]
+                accu = vfn.Call([]reflect.Value{accu, vval})[0]
             }
         }
     }
-    return accu
+    return accu.Interface()
 }
 
 func (r *_BaseRDD) SaveAsTextFile(pathname string) {
     newOutputTextFileRDD(r.prototype, pathname).Collect()
 }
 
-func (r *_BaseRDD) Collect() []interface{} {
-    log.Printf("<Collect> %s", r.prototype)
+func (r *_BaseRDD) Collect() interface{} {
+    parklog("<Collect> %s", r.prototype)
     iters := r.ctx.runRoutine(r.prototype, nil, func(yield Yielder, partition int) interface{} {
-        subCollections := make([]interface{}, 0)
+        var subCollections reflect.Value
         for value := range yield {
-            subCollections = append(subCollections, value)
+            if !subCollections.IsValid() {
+                tv := reflect.TypeOf(value)
+                subCollections = reflect.MakeSlice(reflect.SliceOf(tv), 0, 0)
+            }
+            subCollections = reflect.Append(subCollections, reflect.ValueOf(value))
         }
         return subCollections
     })
-    collections := make([]interface{}, 0)
+    var collections reflect.Value
     for _, iter := range iters {
-        subCollections := (<-iter).([]interface{})
-        collections = append(collections, subCollections...)
+        subCollections := (<-iter).(reflect.Value)
+        if subCollections.IsValid() {
+            if !collections.IsValid() {
+                collections = reflect.MakeSlice(subCollections.Type(), 0, 0)
+            }
+            collections = reflect.AppendSlice(collections, subCollections)
+        }
     }
-    return collections
+    if collections.IsValid() {
+        return collections.Interface()
+    }
+    return nil
 }
 
-func (r *_BaseRDD) CollectAsMap() map[interface{}]interface{} {
-    log.Printf("<CollectAsMap> %s", r.prototype)
-    collections := r.Collect()
-    sets := make(map[interface{}]interface{})
+func (r *_BaseRDD) CollectAsMap() interface{} {
+    parklog("<CollectAsMap> %s", r.prototype)
+    collections := r.Collect().([]*KeyValue)
+    var sets reflect.Value
     for _, item := range collections {
-        keyValue := item.(*KeyValue)
-        sets[keyValue.Key] = keyValue.Value
+        vkey := reflect.ValueOf(item.Key)
+        vval := reflect.ValueOf(item.Value)
+        if !sets.IsValid() {
+            sets = reflect.MakeMap(reflect.MapOf(vkey.Type(), vval.Type()))
+        }
+        sets.SetMapIndex(vkey, vval)
     }
-    return sets
+    if sets.IsValid() {
+        return sets.Interface()
+    }
+    return nil
 }
 
-func (r *_BaseRDD) Foreach(fn LoopFunc) {
-    log.Printf("<Foreach> %s", r.prototype)
+func (r *_BaseRDD) Foreach(fn interface{}) {
+    parklog("<Foreach> %s", r.prototype)
     dumps := r.ctx.runRoutine(r.prototype, nil, func(yield Yielder, partition int) interface{} {
         for value := range yield {
-            fn(value)
+            chk := ty.Check(new(func(func(ty.A), ty.A)), fn, value)
+            vfn, vvalue := chk.Args[0], chk.Args[1]
+            vfn.Call([]reflect.Value{vvalue})
         }
         return struct{}{}
     })
@@ -461,11 +490,11 @@ func (r *_BaseRDD) Foreach(fn LoopFunc) {
     }
 }
 
-func (r *_BaseRDD) Count() int64 {
-    log.Printf("<Count> %s", r.prototype)
-    var cnt int64 = 0
+func (r *_BaseRDD) Count() int {
+    parklog("<Count> %s", r.prototype)
+    cnt := 0
     iters := r.ctx.runRoutine(r.prototype, nil, func(yield Yielder, partition int) interface{} {
-        var total int64 = 0
+        total := 0
         for _ = range yield {
             total++
         }
@@ -473,46 +502,51 @@ func (r *_BaseRDD) Count() int64 {
     })
     for _, iter := range iters {
         for subCount := range iter {
-            cnt += subCount.(int64)
+            cnt += subCount.(int)
         }
     }
     return cnt
 }
 
-func (r *_BaseRDD) Take(n int64) []interface{} {
+func (r *_BaseRDD) Take(n int) interface{} {
     if n < 0 {
         return nil
     }
-    log.Printf("<Take>=%d %s", n, r.prototype)
-    results := make([]interface{}, n)
-    var index int64 = 0
+    parklog("<Take>=%d %s", n, r.prototype)
+    var results reflect.Value
+    index := 0
     p := make([]int, 1)
     p[0] = 0
     for index < n && p[0] < r.prototype.len() {
         if y := r.ctx.runRoutine(r.prototype, p, func(yield Yielder, partition int) interface{} {
-            s := make([]interface{}, n-index)
-            var i int64 = 0
+            var i int = 0
             for ; i < n-index; i++ {
                 if value, ok := <-yield; ok {
-                    s[i] = value
+                    tv := reflect.TypeOf(value)
+                    if !results.IsValid() {
+                        results = reflect.MakeSlice(reflect.SliceOf(tv), n, n)
+                    }
+                    results.Index(i + index).Set(reflect.ValueOf(value))
                 } else {
                     break
                 }
             }
-            return s[:i]
+            return i
         }); len(y) > 0 {
             for taked := range y[0] {
-                takedSlice := taked.([]interface{})
-                copy(results[index:], takedSlice)
-                index += int64(len(takedSlice))
+                takedLength := taked.(int)
+                index += takedLength
             }
         }
         p[0]++
     }
-    return results
+    if results.IsValid() {
+        return results.Slice(0, index).Interface()
+    }
+    return nil
 }
 
-func (r *_BaseRDD) combineByKey(aggregator *_Aggregator, numPartitions int) RDD {
+func (r *_BaseRDD) combineByKey(aggregator *Aggregator, numPartitions int) RDD {
     if numPartitions <= 0 {
         switch {
         case env.parallel == 0:
@@ -531,7 +565,7 @@ func (r *_BaseRDD) getOrCompute(split Split) Yielder {
     yield := make(chan interface{}, 1)
     go func() {
         if r.cache[i] != nil {
-            log.Printf("Cache hit <%s> on Split[%d]", rdd, i)
+            parklog("Cache hit <%s> on Split[%d]", rdd, i)
             for _, value := range r.cache[i] {
                 yield <- value
             }
@@ -541,7 +575,6 @@ func (r *_BaseRDD) getOrCompute(split Split) Yielder {
                 r.cache[i] = append(r.cache[i], value)
                 yield <- value
             }
-            r.cache[i] = r.cache[i][:]
         }
         close(yield)
     }()

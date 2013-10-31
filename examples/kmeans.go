@@ -4,7 +4,6 @@ import (
     "encoding/gob"
     "fmt"
     "github.com/mijia/gopark"
-    "math/rand"
     "strconv"
     "strings"
 )
@@ -29,7 +28,7 @@ type CenterCounter struct {
 
 func main() {
     gopark.ParseOptions()
-    c := gopark.NewContext("kmeans")
+    c := gopark.NewContext("kMeans")
     defer c.Stop()
 
     // This is important, have to register user types for gob to correctly encode.
@@ -41,16 +40,12 @@ func main() {
 
     centers := make([]gopark.Vector, K)
     for i := range centers {
-        center := make(gopark.Vector, D)
-        for j := range center {
-            center[j] = rand.Float64()
-        }
-        centers[i] = center
+        centers[i] = gopark.NewRandomVector(D)
     }
     fmt.Println(centers)
 
-    points := c.TextFile("kmean_data.txt").Map(func(line interface{}) interface{} {
-        vs := strings.Fields(line.(string))
+    points := c.TextFile("kmeans_data.txt").Map(func(line string) gopark.Vector {
+        vs := strings.Fields(line)
         dims := make(gopark.Vector, len(vs))
         for i := range vs {
             dims[i], _ = strconv.ParseFloat(vs[i], 64)
@@ -60,34 +55,28 @@ func main() {
 
     for i := 0; i < 10; i++ {
         fmt.Println("Iter:", i)
-        mappedPoints := points.Map(func(x interface{}) interface{} {
-            p := x.(gopark.Vector)
+        mappedPoints := points.Map(func(p gopark.Vector) *gopark.KeyValue {
             center := CloseCenter(p, centers)
             return &gopark.KeyValue{
                 Key:   center,
                 Value: &CenterCounter{p, 1},
             }
         })
-        newCenters := mappedPoints.ReduceByKey(func(x, y interface{}) interface{} {
-            cc1 := x.(*CenterCounter)
-            cc2 := y.(*CenterCounter)
+        newCenters := mappedPoints.ReduceByKey(func(x, y *CenterCounter) *CenterCounter {
             return &CenterCounter{
-                X:     cc1.X.Plus(cc2.X),
-                Count: cc1.Count + cc2.Count,
+                X:     x.X.Plus(y.X),
+                Count: x.Count + y.Count,
             }
-        }).Map(func(x interface{}) interface{} {
-            keyValue := x.(*gopark.KeyValue)
+        }).Map(func(keyValue *gopark.KeyValue) *gopark.KeyValue {
             cc := keyValue.Value.(*CenterCounter)
             return &gopark.KeyValue{
                 Key:   keyValue.Key,
                 Value: cc.X.Divide(float64(cc.Count)),
             }
-        }).CollectAsMap()
+        }).CollectAsMap().(map[int]gopark.Vector)
 
         updated := false
-        for key, value := range newCenters {
-            center := value.(gopark.Vector)
-            cid := key.(int)
+        for cid, center := range newCenters {
             if center.EulaDistance(centers[cid]) > MIN_DIST {
                 centers[cid] = center
                 updated = true

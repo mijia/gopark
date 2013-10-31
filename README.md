@@ -5,6 +5,16 @@ GoPark is a naive local version porting of [Spark](http://spark.incubator.apache
 
 GoPark is implemented in Go languange, and provides the cocurrent MapReduce(R) data operations using GoRoutines. It can only run in the local mode, but you can specify the concurrent numbers.
 
+Dependency
+-------------
+
+GoPark now uses type parametric functions with run time type safety. This really counts on the awesome lib provided by [https://github.com/BurntSushi/ty](https://github.com/BurntSushi/ty). But I need a simple workaround for the interface{} defined as parameters in function to work with any other input types, so I forked the project and create a pull request (hasn't been merged yet, will turn to that after it got merged). 
+
+```
+go get github.com/mijia/ty
+go get github.com/mijia/gopark
+```
+
 Examples
 -------------
 
@@ -24,8 +34,7 @@ func main() {
     defer c.Stop()
 
     N := 100000
-    iters := c.Data(make([]interface{}, N))
-    count := iters.Map(func(_ interface{}) interface{} {
+    count := c.Data(gopark.Range(0, N)).Map(func(_ int) int {
         x := rand.Float32()
         y := rand.Float32()
         if x*x+y*y < 1 {
@@ -33,8 +42,8 @@ func main() {
         } else {
             return 0
         }
-    }).Reduce(func(x, y interface{}) interface{} {
-        return x.(int) + y.(int)
+    }).Reduce(func(x, y int) int {
+        return x + y
     }).(int)
     fmt.Println("Pi =", (4.0 * float64(count) / float64(N)))
 }
@@ -46,18 +55,22 @@ $ go run hello.go -p=4
 ```
 Checkout the examples/ for more cases.
 
-interface{}
+function as interface{} and reflection
 -------------
-As the examples shows, since Go only provides the interface{} as the root type for everything and the type check/assertion is very strict in golang, so all the apis are implemented using the interface{} as the parameters. Have to do the type asserting in the closure functions. This also applies to the []interface{}.
-
-The basic closure functions are like, 
+Let's take an example. RDD.Map's signature is like
 ```
-type MapperFunc func(interface{}) interface{}
-type PartitionMapperFunc func([]interface{}) []interface{}
-type FlatMapperFunc func(interface{}) []interface{}
-type ReducerFunc func(interface{}, interface{}) interface{}
-type FilterFunc func(interface{}) bool
-type LoopFunc func(interface{})
+Map(fn interface{}) RDD
+```
+The older one is like
+```
+Map(fn func(interface{}) interface{}) RDD
+```
+Now since we have the ability of runtime check from the [https://github.com/BurntSushi/ty](https://github.com/BurntSushi/ty) and also take advantage of [go/reflect](http://golang.org/pkg/reflect/), we can do things like
+```
+d := []int{1, 2, 3, 4, 5}[:]
+c.Data(d).Map(func(x int) string {
+    return fmt.Sprintf("%05d", x)
+}).Collect().([]string)
 ```
 
 Shuffle and Shuffle_N like funcs

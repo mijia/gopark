@@ -1,16 +1,11 @@
 package gopark
 
-import ()
-
 /*
  * This is a really simple recurrsive implementation of scheduler,
  * just call the registered function via the flow of rdd chain.
  * You may need to reconsider this.
  */
 
-//////////////////////////////////////////////////////
-// DAGScheduler base impl
-//////////////////////////////////////////////////////
 type Scheduler interface {
     start()
     clear()
@@ -18,8 +13,7 @@ type Scheduler interface {
     runRoutine(rdd RDD, partitions []int, rn ReducerFn) []Yielder
 }
 
-type _DAGScheduler struct {
-}
+type _DAGScheduler struct{}
 
 func (d *_DAGScheduler) init() {
 }
@@ -38,9 +32,6 @@ func (d *_DAGScheduler) runRoutine(s Scheduler, rdd RDD, partitions []int, rn Re
     return yields
 }
 
-//////////////////////////////////////////////////////
-// LocalScheduler impl
-//////////////////////////////////////////////////////
 type _LocalScheduler struct {
     _DAGScheduler
 }
