@@ -2,40 +2,24 @@ package gopark
 
 import (
     "bufio"
+    "log"
     "bytes"
     "encoding/gob"
     "hash/fnv"
     "os"
-    "runtime"
     "strconv"
     "sync/atomic"
-    "unsafe"
 )
 
-type WeakRef struct {
-    t   uintptr // Type
-    d   uintptr // Data
-}
-
-func NewWeakRef(v interface{}) *WeakRef {
-    i := (*[2]uintptr)(unsafe.Pointer(&v))
-    w := &WeakRef{^i[0], ^i[1]}
-    runtime.SetFinalizer((*uintptr)(unsafe.Pointer(i[1])), func(_ *uintptr) {
-        atomic.StoreUintptr(&w.d, 0)
-        w.t = 0
-    })
-    return w
-}
-
-func (w *WeakRef) Get() (v interface{}) {
-    t := w.t
-    d := atomic.LoadUintptr(&w.d)
-    if d != 0 {
-        i := (*[2]uintptr)(unsafe.Pointer(&v))
-        i[0] = ^t
-        i[1] = ^d
+func Range(start, end int) []interface{} {
+    if start > end {
+        log.Panicf("Range start cannot be larger than end, [%d, %d)", start, end)
     }
-    return
+    r := make([]interface{}, end-start)
+    for i := start; i < end; i++ {
+        r[i-start] = i
+    }
+    return r
 }
 
 type AtomicInt int64

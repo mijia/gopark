@@ -2,6 +2,7 @@ package gopark
 
 import (
     "fmt"
+    "encoding/gob"
     "log"
     "os"
     "os/signal"
@@ -86,7 +87,7 @@ func (c *Context) start() {
     signal.Notify(signalChan, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGABRT)
     go func() {
         s := <-signalChan
-        log.Printf("Captured the signal %v\n", s)
+        parklog("Captured the signal %v\n", s)
         c.Stop()
         os.Exit(2)
     }()
@@ -180,8 +181,11 @@ func NewContext(jobName string) *Context {
 }
 
 func init() {
-    log.SetFlags(log.LstdFlags | log.Lshortfile)
+    log.SetFlags(log.LstdFlags)
     runtime.GOMAXPROCS(runtime.NumCPU())
+
+    gob.Register(new(KeyValue))
+    gob.Register(new(KeyGroups))
 }
 
 var _ = fmt.Println

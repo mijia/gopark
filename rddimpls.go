@@ -40,7 +40,7 @@ type _MappedRDD struct {
 func (m *_MappedRDD) compute(split Split) Yielder {
     yield := make(chan interface{}, 1)
     go func() {
-        log.Printf("Computing <%s> on Split[%d]", m, split.getIndex())
+        parklog("Computing <%s> on Split[%d]", m, split.getIndex())
         for value := range m.previous.traverse(split) {
             yield <- m.fn(value)
         }
@@ -73,7 +73,7 @@ type _PartitionMappedRDD struct {
 }
 
 func (r *_PartitionMappedRDD) compute(split Split) Yielder {
-    log.Printf("Computing <%s> on Split[%d]", r, split.getIndex())
+    parklog("Computing <%s> on Split[%d]", r, split.getIndex())
     return r.fn(r.previous.traverse(split))
 }
 
@@ -103,7 +103,7 @@ type _FlatMappedRDD struct {
 func (r *_FlatMappedRDD) compute(split Split) Yielder {
     yield := make(chan interface{}, 1)
     go func() {
-        log.Printf("Computing <%s> on Split[%d]", r, split.getIndex())
+        parklog("Computing <%s> on Split[%d]", r, split.getIndex())
         for arg := range r.previous.traverse(split) {
             value := r.fn(arg)
             if value != nil && len(value) > 0 {
@@ -143,7 +143,7 @@ type _FilteredRDD struct {
 func (r *_FilteredRDD) compute(split Split) Yielder {
     yield := make(chan interface{}, 1)
     go func() {
-        log.Printf("Computing <%s> on Split[%d]", r, split.getIndex())
+        parklog("Computing <%s> on Split[%d]", r, split.getIndex())
         for value := range r.previous.traverse(split) {
             if r.fn(value) {
                 yield <- value
@@ -181,7 +181,7 @@ type _SampledRDD struct {
 func (r *_SampledRDD) compute(split Split) Yielder {
     yield := make(chan interface{}, 1)
     go func() {
-        log.Printf("Computing <%s> on Split[%d]", r, split.getIndex())
+        parklog("Computing <%s> on Split[%d]", r, split.getIndex())
         rd := rand.New(rand.NewSource(r.seed))
         for value := range r.previous.traverse(split) {
             if rd.Float32() <= r.fraction {
@@ -234,7 +234,7 @@ type _TextFileRDD struct {
 func (t *_TextFileRDD) compute(split Split) Yielder {
     yield := make(chan interface{}, 100)
     go func() {
-        log.Printf("Computing <%s> on Split[%d]", t, split.getIndex())
+        parklog("Computing <%s> on Split[%d]", t, split.getIndex())
         defer close(yield)
 
         f, err := os.Open(t.path)
@@ -338,7 +338,7 @@ type _ShuffledRDD struct {
 type _ShuffleBucket map[interface{}][]interface{}
 
 func (r *_ShuffledRDD) compute(split Split) Yielder {
-    log.Printf("Computing <%s> on Split[%d]", r, split.getIndex())
+    parklog("Computing <%s> on Split[%d]", r, split.getIndex())
     r.shuffleJob.Do(func() {
         r.runShuffleJob()
     })
@@ -351,7 +351,7 @@ func (r *_ShuffledRDD) compute(split Split) Yielder {
         bucketChan[i] = make(chan _ShuffleBucket)
         go func(inputId int, bchan chan _ShuffleBucket) {
             pathName := env.getLocalShufflePath(r.shuffleId, inputId, outputId)
-            log.Printf("Decoding shuffle-%d[GOB] from local file %s", r.shuffleId, pathName)
+            parklog("Decoding shuffle-%d[GOB] from local file %s", r.shuffleId, pathName)
             var bucket _ShuffleBucket
             bs, err := ioutil.ReadFile(pathName)
             if err != nil {
@@ -389,7 +389,7 @@ func (r *_ShuffledRDD) compute(split Split) Yielder {
 }
 
 func (r *_ShuffledRDD) runShuffleJob() {
-    log.Printf("Computing shuffle stage for <%s>", r)
+    parklog("Computing shuffle stage for <%s>", r)
     iters := r.ctx.runRoutine(r.parent, nil, func(yield Yielder, partition int) interface{} {
         numSplits := r.partitioner.numPartitions()
         buckets := make([]_ShuffleBucket, numSplits)
@@ -413,9 +413,9 @@ func (r *_ShuffledRDD) runShuffleJob() {
             encoder := gob.NewEncoder(buffer)
             encoder.Encode(bucket)
             if err := ioutil.WriteFile(pathName, buffer.Bytes(), 0644); err != nil {
-                panic(err)
+                log.Panic(err)
             }
-            log.Printf("Encoding shuffle-%d[GOB] into local file %s", r.shuffleId, pathName)
+            parklog("Encoding shuffle-%d[GOB] into local file %s", r.shuffleId, pathName)
         }
         return struct{}{}
     })
@@ -424,7 +424,7 @@ func (r *_ShuffledRDD) runShuffleJob() {
             // we need to dump the yielders that returns to finish up the routine
         }
     }
-    log.Printf("Shuffling DONE for <%s>", r)
+    parklog("Shuffling DONE for <%s>", r)
 }
 
 func (r *_ShuffledRDD) init(rdd RDD, aggregator *_Aggregator, partitioner Partitioner) {
@@ -463,7 +463,7 @@ type _OutputTextFileRDD struct {
 func (r *_OutputTextFileRDD) compute(split Split) Yielder {
     yield := make(chan interface{}, 1)
     go func() {
-        log.Printf("Saving <%s> on Split[%d]", r, split.getIndex())
+        parklog("Saving <%s> on Split[%d]", r, split.getIndex())
         pathName := filepath.Join(r.pathname, fmt.Sprintf("%05d", split.getIndex()))
         outputFile, err := os.Create(pathName)
         if err != nil {
@@ -495,7 +495,7 @@ func (r *_OutputTextFileRDD) init(rdd RDD, pathname string) {
         os.Mkdir(absPathname, os.ModePerm)
     } else {
         if !fStat.IsDir() {
-            panic(fmt.Errorf("%s must be a directory in file system.", pathname))
+            log.Panicf("%s must be a directory in file system.", pathname)
         }
         // delete all the files under the directory
         err2 := filepath.Walk(absPathname, func(path string, info os.FileInfo, err error) error {
@@ -545,7 +545,7 @@ type _DataRDD struct {
 func (r *_DataRDD) compute(split Split) Yielder {
     yield := make(chan interface{}, 1)
     go func() {
-        log.Printf("Computing <%s> on Split[%d]", r, split.getIndex())
+        parklog("Computing <%s> on Split[%d]", r, split.getIndex())
         dSplit := split.(*_DataSplit)
         for _, value := range dSplit.values {
             yield <- value
@@ -559,7 +559,7 @@ func (r *_DataRDD) init(ctx *Context, data []interface{}, numPartitions int) {
     r._BaseRDD.init(ctx, r)
     r.size = len(data)
     if r.size <= 0 {
-        panic(fmt.Errorf("Please don't provide an empty data array."))
+        log.Panicf("Please don't provide an empty data array.")
     }
     if numPartitions <= 0 {
         numPartitions = 1
@@ -618,7 +618,7 @@ type _UnionRDD struct {
 func (r *_UnionRDD) compute(split Split) Yielder {
     yield := make(chan interface{}, 1)
     go func() {
-        log.Printf("Computing <%s> on Split[%d]", r, split.getIndex())
+        parklog("Computing <%s> on Split[%d]", r, split.getIndex())
         unionSplit := split.(*_UnionSplit)
         for value := range unionSplit.rdd.traverse(unionSplit.split) {
             yield <- value
@@ -671,7 +671,7 @@ type _CoGroupedRDD struct {
 func (r *_CoGroupedRDD) compute(split Split) Yielder {
     yield := make(chan interface{}, 1)
     go func() {
-        log.Printf("Computing <%s> on Split[%d]", r, split.getIndex())
+        parklog("Computing <%s> on Split[%d]", r, split.getIndex())
         keyGroups := make(map[interface{}][][]interface{})
         for groupIndex, rdd := range r.rdds {
             for value := range rdd.traverse(split) {
@@ -739,7 +739,7 @@ type _CartesianRDD struct {
 func (r *_CartesianRDD) compute(split Split) Yielder {
     yield := make(chan interface{}, 1)
     go func() {
-        log.Printf("Computing <%s> on Split[%d]", r, split.getIndex())
+        parklog("Computing <%s> on Split[%d]", r, split.getIndex())
         cSplit := split.(*_CartesianSplit)
         rightYields := make([]interface{}, 0)
         for i := range r.rdd1.traverse(cSplit.split1) {

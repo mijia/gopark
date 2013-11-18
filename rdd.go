@@ -52,6 +52,7 @@ type RDD interface {
     CollectAsMap() map[interface{}]interface{}
     Count() int64
     Foreach(fn LoopFunc)
+    Foreach0(fn LoopFunc)
     SaveAsTextFile(pathname string)
 
     Cache() RDD
@@ -357,7 +358,7 @@ func (r *_BaseRDD) CountByKey() map[interface{}]int64 {
 }
 
 func (r *_BaseRDD) CountByValue() map[interface{}]int64 {
-    log.Printf("<CountByValue> %s", r.prototype)
+    parklog("<CountByValue> %s", r.prototype)
     iters := r.ctx.runRoutine(r.prototype, nil, func(yield Yielder, partition int) interface{} {
         cnts := make(map[interface{}]int64)
         for value := range yield {
@@ -385,7 +386,7 @@ func (r *_BaseRDD) CountByValue() map[interface{}]int64 {
 }
 
 func (r *_BaseRDD) Reduce(fn ReducerFunc) interface{} {
-    log.Printf("<Reduce> %s", r.prototype)
+    parklog("<Reduce> %s", r.prototype)
     iters := r.ctx.runRoutine(r.prototype, nil, func(yield Yielder, partition int) interface{} {
         var accu interface{} = nil
         for value := range yield {
@@ -419,7 +420,7 @@ func (r *_BaseRDD) SaveAsTextFile(pathname string) {
 }
 
 func (r *_BaseRDD) Collect() []interface{} {
-    log.Printf("<Collect> %s", r.prototype)
+    parklog("<Collect> %s", r.prototype)
     iters := r.ctx.runRoutine(r.prototype, nil, func(yield Yielder, partition int) interface{} {
         subCollections := make([]interface{}, 0)
         for value := range yield {
@@ -436,7 +437,7 @@ func (r *_BaseRDD) Collect() []interface{} {
 }
 
 func (r *_BaseRDD) CollectAsMap() map[interface{}]interface{} {
-    log.Printf("<CollectAsMap> %s", r.prototype)
+    parklog("<CollectAsMap> %s", r.prototype)
     collections := r.Collect()
     sets := make(map[interface{}]interface{})
     for _, item := range collections {
@@ -446,8 +447,25 @@ func (r *_BaseRDD) CollectAsMap() map[interface{}]interface{} {
     return sets
 }
 
+func (r *_BaseRDD) Foreach0(fn LoopFunc) {
+    parklog("<Foreach0> %s", r.prototype)
+    for i := 0; i < r.prototype.len(); i++ {
+        dumps := r.ctx.runRoutine(r.prototype, []int{i}[:], func(yield Yielder, partition int) interface{} {
+            for value := range yield {
+                fn(value)
+            }
+            return struct{}{}
+        })
+        // we need to dump all the channels otherwise the function will not be executed.
+        for _, dump := range dumps {
+            for _ = range dump {
+            }
+        }
+    }
+}
+
 func (r *_BaseRDD) Foreach(fn LoopFunc) {
-    log.Printf("<Foreach> %s", r.prototype)
+    parklog("<Foreach> %s", r.prototype)
     dumps := r.ctx.runRoutine(r.prototype, nil, func(yield Yielder, partition int) interface{} {
         for value := range yield {
             fn(value)
@@ -462,7 +480,7 @@ func (r *_BaseRDD) Foreach(fn LoopFunc) {
 }
 
 func (r *_BaseRDD) Count() int64 {
-    log.Printf("<Count> %s", r.prototype)
+    parklog("<Count> %s", r.prototype)
     var cnt int64 = 0
     iters := r.ctx.runRoutine(r.prototype, nil, func(yield Yielder, partition int) interface{} {
         var total int64 = 0
@@ -483,7 +501,7 @@ func (r *_BaseRDD) Take(n int64) []interface{} {
     if n < 0 {
         return nil
     }
-    log.Printf("<Take>=%d %s", n, r.prototype)
+    parklog("<Take>=%d %s", n, r.prototype)
     results := make([]interface{}, n)
     var index int64 = 0
     p := make([]int, 1)
@@ -531,7 +549,7 @@ func (r *_BaseRDD) getOrCompute(split Split) Yielder {
     yield := make(chan interface{}, 1)
     go func() {
         if r.cache[i] != nil {
-            log.Printf("Cache hit <%s> on Split[%d]", rdd, i)
+            parklog("Cache hit <%s> on Split[%d]", rdd, i)
             for _, value := range r.cache[i] {
                 yield <- value
             }
@@ -555,16 +573,16 @@ func (r *_BaseRDD) persistOrCompute(split Split) Yielder {
     go func() {
         if len(r.persistLocation) != 0 {
             pathname := env.getLocalRDDPath(r.id, i)
-            log.Printf("Decoding rdd-%d/%d[GOB] from local file %s", r.id, i, pathname)
+            parklog("Decoding rdd-%d/%d[GOB] from local file %s", r.id, i, pathname)
             var values []interface{}
             bs, err := ioutil.ReadFile(pathname)
             if err != nil {
-                panic(fmt.Errorf("Error when persist/decode rdd split[%d], %v", i, err))
+                log.Panicf("Error when persist/decode rdd split[%d], %v", i, err)
             }
             buffer := bytes.NewBuffer(bs)
             decoder := gob.NewDecoder(buffer)
             if err = decoder.Decode(&values); err != nil {
-                panic(fmt.Errorf("Error when persist/decode rdd split[%d], %v", i, err))
+                log.Panicf("Error when persist/decode rdd split[%d], %v", i, err)
             }
             for _, value := range values {
                 yield <- value
@@ -580,9 +598,9 @@ func (r *_BaseRDD) persistOrCompute(split Split) Yielder {
             encoder := gob.NewEncoder(buffer)
             encoder.Encode(values[:])
             if err := ioutil.WriteFile(pathname, buffer.Bytes(), 0644); err != nil {
-                panic(fmt.Errorf("Error when persist/encode rdd split[%d], %v", i, err))
+                log.Panicf("Error when persist/encode rdd split[%d], %v", i, err)
             }
-            log.Printf("Encoding rdd-%d/%d[GOB] into local file %s", r.id, i, pathname)
+            parklog("Encoding rdd-%d/%d[GOB] into local file %s", r.id, i, pathname)
             r.persistLocation = pathname
         }
         close(yield)

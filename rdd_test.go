@@ -20,6 +20,7 @@ func TestDataRDD(t *testing.T) {
     defer c.Stop()
     a := []interface{}{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}[:]
     data := c.Data(a)
+    fmt.Println(data.Collect())
     if data.Count() != 10 {
         t.Errorf("Data parallellized error, with %s", data)
     }
@@ -30,19 +31,16 @@ func TestTextFile(t *testing.T) {
     c := NewContext("TestTextFile")
     fmt.Printf("\n\n%s\n", c)
     defer c.Stop()
-    txt := c.TextFile("examples/points.txt")
-    samples := txt.Map(func(line interface{}) interface{} {
+    txt := c.TextFile("rdd.go")
+    samples := txt.FlatMap(func(line interface{}) []interface{} {
         vs := strings.Fields(line.(string))
-        d2 := vs[1]
-        y := vs[2]
-        return &KeyValue{y, d2}
-    }).Take(5)
-    for _, sample := range samples {
-        fmt.Println(sample)
-        if _, ok := sample.(*KeyValue); !ok {
-            t.Error("TextFile KeyValue Error")
+        results := make([]interface{}, len(vs))
+        for i := range vs {
+            results[i] = vs[i]
         }
-    }
+        return results
+    }).Take(5)
+    fmt.Println(samples)
     if len(samples) != 5 {
         t.Errorf("TextFile Samples length error, %d", len(samples))
     }
