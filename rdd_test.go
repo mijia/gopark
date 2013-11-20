@@ -81,8 +81,8 @@ func TestSimpleMappers(t *testing.T) {
         t.Errorf("Filter data error, %v", filterData.Collect())
     }
 
-    samples := flatData.Sample(0.25, 42).Take(5)
-    fmt.Println(samples)
+    samples := flatData.Sample(1, 42, true).Collect()
+    fmt.Println("Samples:", samples)
     if len(samples) <= 0 {
         t.Errorf("Sample Data error, %v", samples)
     }
@@ -298,6 +298,17 @@ func TestSortByKey(t *testing.T) {
     })
     if !sort.IsSorted(sort.Reverse(sorter)) {
         t.Error("SortByKey failed, is not sorted.")
+    }
+
+    data = c.Data(d).SortByValue(func(x, y interface{}) bool {
+        return x.(string) < y.(string)
+    }, true).Collect()
+    fmt.Println(data)
+    sorter = NewParkSorter(data, func(x, y interface{}) bool {
+        return x.(*KeyValue).Value.(string) < y.(*KeyValue).Value.(string)
+    })
+    if !sort.IsSorted(sort.Reverse(sorter)) {
+        t.Error("SortByValue failed, is not sorted.")
     }
 }
 

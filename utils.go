@@ -2,10 +2,10 @@ package gopark
 
 import (
     "bufio"
-    "log"
     "bytes"
     "encoding/gob"
     "hash/fnv"
+    "log"
     "os"
     "strconv"
     "sync/atomic"

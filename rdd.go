@@ -21,9 +21,10 @@ type RDD interface {
     MapPartition(f PartitionMapperFunc) RDD
     FlatMap(f FlatMapperFunc) RDD
     Filter(f FilterFunc) RDD
-    Sample(fraction float32, seed int64) RDD
+    Sample(fraction float64, seed int64, withReplacement bool) RDD
     GroupByKey() RDD
     SortByKey(fn KeyLessFunc, reverse bool) RDD
+    SortByValue(fn KeyLessFunc, reverse bool) RDD
     PartitionByKey() RDD
     ReduceByKey(fn ReducerFunc) RDD
     Distinct() RDD
@@ -36,6 +37,7 @@ type RDD interface {
 
     GroupByKey_N(numPartitions int) RDD
     SortByKey_N(fn KeyLessFunc, reverse bool, numPartitions int) RDD
+    SortByValue_N(fn KeyLessFunc, reverse bool, numPartitions int) RDD
     PartitionByKey_N(numPartitions int) RDD
     ReduceByKey_N(fn ReducerFunc, numPartitions int) RDD
     Distinct_N(numPartitions int) RDD
@@ -261,6 +263,21 @@ func (r *_BaseRDD) SortByKey_N(fn KeyLessFunc, reverse bool, numPartitions int) 
     }).MapPartition(goSortMapper)
 }
 
+func (r *_BaseRDD) SortByValue(fn KeyLessFunc, reverse bool) RDD {
+    return r.SortByValue_N(fn, reverse, 0)
+}
+
+func (r *_BaseRDD) SortByValue_N(fn KeyLessFunc, reverse bool, numPartitions int) RDD {
+    return r.Map(func(x interface{}) interface{} {
+        kv := x.(*KeyValue)
+        return &KeyValue{kv.Value, kv.Key}
+    }).SortByKey_N(fn, reverse, numPartitions).Map(func(x interface{}) interface{} {
+        kv := x.(*KeyValue)
+        kv.Key, kv.Value = kv.Value, kv.Key
+        return kv
+    })
+}
+
 func (r *_BaseRDD) Cartesian(other RDD) RDD {
     return newCartesianRDD(r.ctx, r.prototype, other)
 }
@@ -347,8 +364,8 @@ func (r *_BaseRDD) Filter(f FilterFunc) RDD {
     return newFilteredRDD(r.prototype, f)
 }
 
-func (r *_BaseRDD) Sample(fraction float32, seed int64) RDD {
-    return newSampledRDD(r.prototype, fraction, seed)
+func (r *_BaseRDD) Sample(fraction float64, seed int64, withReplacement bool) RDD {
+    return newSampledRDD(r.prototype, fraction, seed, withReplacement)
 }
 
 func (r *_BaseRDD) CountByKey() map[interface{}]int64 {

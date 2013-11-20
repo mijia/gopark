@@ -8,6 +8,7 @@ import (
     "io"
     "io/ioutil"
     "log"
+    "math"
     "math/rand"
     "os"
     "path/filepath"
@@ -174,18 +175,32 @@ func newFilteredRDD(rdd RDD, f FilterFunc) RDD {
 ////////////////////////////////////////////////////////////////////////
 type _SampledRDD struct {
     _DerivedRDD
-    fraction float32
-    seed     int64
+    fraction        float64
+    seed            int64
+    withReplacement bool
 }
 
 func (r *_SampledRDD) compute(split Split) Yielder {
     yield := make(chan interface{}, 1)
     go func() {
         parklog("Computing <%s> on Split[%d]", r, split.getIndex())
-        rd := rand.New(rand.NewSource(r.seed))
-        for value := range r.previous.traverse(split) {
-            if rd.Float32() <= r.fraction {
-                yield <- value
+        seed := r.seed + int64(split.getIndex())
+        rd := rand.New(rand.NewSource(seed))
+        if r.withReplacement {
+            allData := make([]interface{}, 0)
+            for value := range r.previous.traverse(split) {
+                allData = append(allData, value)
+            }
+            dCount := len(allData)
+            sampleSize := int(math.Ceil(float64(dCount) * r.fraction))
+            for i := 0; i < sampleSize; i++ {
+                yield <- allData[rd.Intn(dCount)]
+            }
+        } else {
+            for value := range r.previous.traverse(split) {
+                if rd.Float64() <= r.fraction {
+                    yield <- value
+                }
             }
         }
         close(yield)
@@ -193,19 +208,20 @@ func (r *_SampledRDD) compute(split Split) Yielder {
     return yield
 }
 
-func (r *_SampledRDD) init(rdd RDD, fraction float32, seed int64) {
+func (r *_SampledRDD) init(rdd RDD, fraction float64, seed int64, withReplacement bool) {
     r._DerivedRDD.init(rdd, r)
     r.fraction = fraction
     r.seed = seed
+    r.withReplacement = withReplacement
 }
 
 func (r *_SampledRDD) String() string {
     return fmt.Sprintf("SampledRDD-%d <%s>", r.id, r._DerivedRDD.previous)
 }
 
-func newSampledRDD(rdd RDD, fraction float32, seed int64) RDD {
+func newSampledRDD(rdd RDD, fraction float64, seed int64, withReplacement bool) RDD {
     r := &_SampledRDD{}
-    r.init(rdd, fraction, seed)
+    r.init(rdd, fraction, seed, withReplacement)
     return r
 }
 

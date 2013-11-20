@@ -1,8 +1,8 @@
 package gopark
 
 import (
-    "fmt"
     "encoding/gob"
+    "fmt"
     "log"
     "os"
     "os/signal"
