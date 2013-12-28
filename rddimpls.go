@@ -2,17 +2,15 @@ package gopark
 
 import (
     "bufio"
-    "bytes"
-    "encoding/gob"
     "fmt"
     "io"
-    "io/ioutil"
     "log"
     "math"
     "math/rand"
     "os"
     "path/filepath"
     "sync"
+    "time"
 )
 
 //////////////////////////////////////////////////////
@@ -272,7 +270,7 @@ func (t *_TextFileRDD) compute(split Split) Yielder {
             }
         }
 
-        if start > end {
+        if start >= end {
             return
         }
         r := bufio.NewReader(f)
@@ -280,7 +278,7 @@ func (t *_TextFileRDD) compute(split Split) Yielder {
         for err == nil {
             yield <- line
             start += int64(len(line)) + 1 // here would be dargon
-            if start > end {
+            if start >= end {
                 break
             }
             line, err = readLine(r)
@@ -305,7 +303,11 @@ func (t *_TextFileRDD) init(ctx *Context, path string, numSplits int) {
     if numSplits > 0 {
         t.splitSize = t.size / int64(numSplits)
     }
-    t.length = int(t.size / t.splitSize)
+    if t.size > 0 {
+        t.length = int(t.size / t.splitSize)
+    } else {
+        t.length = 0
+    }
     t.splits = make([]Split, t.length)
     for i := 0; i < t.length; i++ {
         end := int64(i+1) * t.splitSize
@@ -333,6 +335,8 @@ func newTextFileRDD(ctx *Context, path string) RDD {
 ////////////////////////////////////////////////////////////////////////
 // ShuffledRDD Impl
 ////////////////////////////////////////////////////////////////////////
+const SHUFFLE_MAGIC_ID = 9999
+
 type _ShuffledSplit struct {
     index int
 }
@@ -351,53 +355,36 @@ type _ShuffledRDD struct {
     shuffleJob  sync.Once
 }
 
-type _ShuffleBucket map[interface{}][]interface{}
-
 func (r *_ShuffledRDD) compute(split Split) Yielder {
     parklog("Computing <%s> on Split[%d]", r, split.getIndex())
     r.shuffleJob.Do(func() {
         r.runShuffleJob()
     })
 
-    numParentSplit := r.parent.len()
-    combined := make(_ShuffleBucket)
-    outputId := split.getIndex()
-    bucketChan := make([]chan _ShuffleBucket, numParentSplit)
-    for i := 0; i < numParentSplit; i++ {
-        bucketChan[i] = make(chan _ShuffleBucket)
-        go func(inputId int, bchan chan _ShuffleBucket) {
-            pathName := env.getLocalShufflePath(r.shuffleId, inputId, outputId)
-            parklog("Decoding shuffle-%d[GOB] from local file %s", r.shuffleId, pathName)
-            var bucket _ShuffleBucket
-            bs, err := ioutil.ReadFile(pathName)
-            if err != nil {
-                panic(err)
-            }
-            buffer := bytes.NewBuffer(bs)
-            decoder := gob.NewDecoder(buffer)
-            if err = decoder.Decode(&bucket); err != nil {
-                panic(err)
-            }
-            bchan <- bucket
-            close(bchan)
-        }(i, bucketChan[i])
-    }
-    for _, bchan := range bucketChan {
-        for bucket := range bchan {
-            for key, value := range bucket {
-                if collection, ok := combined[key]; ok {
-                    combined[key] = r.aggregator.combinerMerger(collection, value)
-                } else {
-                    combined[key] = value
-                }
-            }
-        }
-    }
-
     yield := make(chan interface{}, 1)
     go func() {
-        for key, value := range combined {
-            yield <- &KeyValue{key, value}
+        outputId := split.getIndex()
+        combinePath := env.getLocalShufflePath(r.shuffleId, SHUFFLE_MAGIC_ID, outputId)
+        input, err := os.Open(combinePath)
+        if err != nil {
+            log.Panicf("Error when open/decode shuffle-%d split[%d] from file %s, %v", r.shuffleId, outputId, combinePath, err)
+        }
+        defer input.Close()
+        parklog("Decoding shuffle-%d[GOB] from local file %s", r.shuffleId, combinePath)
+
+        var buffer []interface{}
+        encoder := NewBufferEncoder(ENCODE_BUFFER_SIZE)
+        for err == nil {
+            buffer, err = encoder.Decode(input)
+            if err != nil {
+                break
+            }
+            for _, value := range buffer {
+                yield <- value
+            }
+        }
+        if err != nil && err != io.EOF {
+            log.Panicf("Error when open/decode shuffle split[%d] from file %s, %v", outputId, combinePath, err)
         }
         close(yield)
     }()
@@ -405,12 +392,28 @@ func (r *_ShuffledRDD) compute(split Split) Yielder {
 }
 
 func (r *_ShuffledRDD) runShuffleJob() {
+    r.computeShuffleStage()
+
+    splits := r.getSplits()
+    var wg sync.WaitGroup
+    for _, split := range splits {
+        wg.Add(1)
+        go func(s Split) {
+            r.computeCombineStage(s)
+            wg.Done()
+        }(split)
+    }
+    wg.Wait()
+}
+
+func (r *_ShuffledRDD) computeShuffleStage() {
+    start := time.Now()
     parklog("Computing shuffle stage for <%s>", r)
     iters := r.ctx.runRoutine(r.parent, nil, func(yield Yielder, partition int) interface{} {
         numSplits := r.partitioner.numPartitions()
-        buckets := make([]_ShuffleBucket, numSplits)
+        buckets := make([]map[interface{}][]interface{}, numSplits)
         for i := 0; i < numSplits; i++ {
-            buckets[i] = make(_ShuffleBucket)
+            buckets[i] = make(map[interface{}][]interface{})
         }
         for value := range yield {
             keyValue := value.(*KeyValue)
@@ -422,17 +425,33 @@ func (r *_ShuffledRDD) runShuffleJob() {
                 bucket[keyValue.Key] = r.aggregator.combinerCreator(keyValue.Value)
             }
         }
+        var wg sync.WaitGroup
         for i := 0; i < numSplits; i++ {
-            pathName := env.getLocalShufflePath(r.shuffleId, partition, i)
-            bucket := buckets[i]
-            buffer := new(bytes.Buffer)
-            encoder := gob.NewEncoder(buffer)
-            encoder.Encode(bucket)
-            if err := ioutil.WriteFile(pathName, buffer.Bytes(), 0644); err != nil {
-                log.Panic(err)
-            }
-            parklog("Encoding shuffle-%d[GOB] into local file %s", r.shuffleId, pathName)
+            wg.Add(1)
+            go func(inputId int) {
+                pathName := env.getLocalShufflePath(r.shuffleId, partition, inputId)
+                output, err := os.Create(pathName)
+                if err != nil {
+                    log.Panicf("Error when shuffling data into file %s, %v", pathName, err)
+                }
+                defer output.Close()
+                encoder := NewBufferEncoder(ENCODE_BUFFER_SIZE)
+                for key, value := range buckets[inputId] {
+                    obj := &KeyValue{key, value}
+                    err = encoder.Encode(output, obj)
+                    if err != nil {
+                        log.Panicf("Error when shuffling data into file %s, %v", pathName, err)
+                    }
+                }
+                err = encoder.Flush(output)
+                if err != nil {
+                    log.Panicf("Error when shuffling data into file %s, %v", pathName, err)
+                }
+                parklog("Encoding shuffle-%d[GOB] into local file %s", r.shuffleId, pathName)
+                wg.Done()
+            }(i)
         }
+        wg.Wait()
         return struct{}{}
     })
     for _, iter := range iters {
@@ -440,7 +459,72 @@ func (r *_ShuffledRDD) runShuffleJob() {
             // we need to dump the yielders that returns to finish up the routine
         }
     }
-    parklog("Shuffling DONE for <%s>", r)
+    parklog("Shuffling Stage DONE for <%s>, duration=%s", r, time.Since(start))
+}
+
+func (r *_ShuffledRDD) computeCombineStage(split Split) {
+    start := time.Now()
+    parklog("Computing combine stage for <%s> on split[%d]", r, split.getIndex())
+
+    outputId := split.getIndex()
+    numParentSplit := r.parent.len()
+    combined := make(map[interface{}][]interface{})
+    var lock sync.Mutex
+    var wg sync.WaitGroup
+    for inputId := 0; inputId < numParentSplit; inputId++ {
+        wg.Add(1)
+        go func(inputId int) {
+            pathName := env.getLocalShufflePath(r.shuffleId, inputId, outputId)
+            parklog("Merging shuffle-%d[GOB] from local file %s", r.shuffleId, pathName)
+            input, err := os.Open(pathName)
+            if err != nil {
+                log.Panicf("Error when open/decode shuff-%d from local file %s, %v", r.shuffleId, pathName, err)
+            }
+            defer input.Close()
+
+            var buffer []interface{}
+            encoder := NewBufferEncoder(ENCODE_BUFFER_SIZE)
+            for err == nil {
+                buffer, err = encoder.Decode(input)
+                if err != nil {
+                    break
+                }
+                for _, value := range buffer {
+                    kv := value.(*KeyValue)
+                    lock.Lock()
+                    if collection, ok := combined[kv.Key]; ok {
+                        combined[kv.Key] = r.aggregator.combinerMerger(collection, kv.Value.([]interface{}))
+                    } else {
+                        combined[kv.Key] = kv.Value.([]interface{})
+                    }
+                    lock.Unlock()
+                }
+            }
+            wg.Done()
+        }(inputId)
+    }
+    wg.Wait()
+
+    // dump to the merged file
+    combinePath := env.getLocalShufflePath(r.shuffleId, SHUFFLE_MAGIC_ID, outputId)
+    output, err := os.Create(combinePath)
+    if err != nil {
+        log.Panicf("Error when combine/decode shuffle data into local file %s, %v", combinePath, err)
+    }
+    defer output.Close()
+    encoder := NewBufferEncoder(ENCODE_BUFFER_SIZE)
+    for key, value := range combined {
+        kv := &KeyValue{key, value}
+        err = encoder.Encode(output, kv)
+        if err != nil {
+            log.Panicf("Error when combine/decode shuffle data into local file %s, %v", combinePath, err)
+        }
+    }
+    err = encoder.Flush(output)
+    if err != nil {
+        log.Panicf("Error when combine/decode shuffle data into local file %s, %v", combinePath, err)
+    }
+    parklog("Merging/Combining shuffle data into local file %s, duration=%s", combinePath, time.Since(start))
 }
 
 func (r *_ShuffledRDD) init(rdd RDD, aggregator *_Aggregator, partitioner Partitioner) {
@@ -454,7 +538,7 @@ func (r *_ShuffledRDD) init(rdd RDD, aggregator *_Aggregator, partitioner Partit
 
     r.splits = make([]Split, r.length)
     for i := 0; i < r.length; i++ {
-        r.splits[i] = &_ShuffledSplit{i}
+        r.splits[i] = &_ShuffledSplit{index: i}
     }
 }
 
@@ -719,7 +803,7 @@ func (r *_CoGroupedRDD) init(ctx *Context, rdds []RDD, numPartitions int) {
     r.length = numPartitions
     r.splits = make([]Split, r.length)
     for i := 0; i < numPartitions; i++ {
-        r.splits[i] = &_ShuffledSplit{i}
+        r.splits[i] = &_ShuffledSplit{index: i}
     }
 }
 

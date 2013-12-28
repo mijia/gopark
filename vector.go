@@ -64,7 +64,7 @@ func NewRandomLimitedVector(size int, minValue, maxValue float64) Vector {
 func (v Vector) String() string {
     fields := make([]string, len(v))
     for i := range v {
-        fields[i] = fmt.Sprintf("%.10f", v[i])
+        fields[i] = fmt.Sprintf("%v", v[i])
     }
     return strings.Join(fields, "\t")
 }

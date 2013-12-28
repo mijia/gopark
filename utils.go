@@ -3,7 +3,9 @@ package gopark
 import (
     "bufio"
     "bytes"
+    "encoding/binary"
     "encoding/gob"
+    "fmt"
     "hash/fnv"
     "log"
     "os"
@@ -63,6 +65,8 @@ func readLine(r *bufio.Reader) (string, error) {
     return string(ln), err
 }
 
+var _ = fmt.Println
+
 func seekToNewLine(f *os.File, start int64) (int64, error) {
     _, err := f.Seek(start, 0)
     if err != nil {
@@ -100,4 +104,111 @@ func hashCode(value interface{}) (hashCode int64) {
         hashCode = hashCode*256 + int64(hashByte)
     }
     return
+}
+
+func HashCode(value interface{}) int64 {
+    return hashCode(value)
+}
+
+// Encode related funcs
+
+const ENCODE_BUFFER_SIZE = 10000
+
+type EncodeBox struct {
+    Object interface{}
+}
+
+func init() {
+    gob.Register(new(EncodeBox))
+    gob.Register(make([]interface{}, 0))
+}
+
+type BufferEncoder struct {
+    size      int
+    buffer    []interface{}
+    watermark int
+}
+
+func NewBufferEncoder(size int) *BufferEncoder {
+    encoder := &BufferEncoder{}
+    encoder.size = size
+    encoder.buffer = make([]interface{}, size)
+    return encoder
+}
+
+func (e *BufferEncoder) Encode(f *os.File, value interface{}) error {
+    if len(e.buffer) == e.watermark {
+        err := encodeObjectIntoFile(f, e.buffer)
+        if err != nil {
+            return err
+        }
+        e.watermark = 0
+    }
+    e.buffer[e.watermark] = value
+    e.watermark++
+    return nil
+}
+
+func (e *BufferEncoder) Flush(f *os.File) error {
+    if e.watermark > 0 {
+        err := encodeObjectIntoFile(f, e.buffer[:e.watermark])
+        if err != nil {
+            return err
+        }
+        e.watermark = 0
+    }
+    return nil
+}
+
+func (e *BufferEncoder) Decode(f *os.File) ([]interface{}, error) {
+    buffer, err := decodeObjectFromFile(f)
+    if err != nil {
+        return nil, err
+    }
+    return buffer.([]interface{}), nil
+}
+
+func encodeObjectIntoFile(f *os.File, value interface{}) error {
+    box := EncodeBox{value}
+    objBuffer := new(bytes.Buffer)
+    err := gob.NewEncoder(objBuffer).Encode(box)
+    if err != nil {
+        return err
+    }
+
+    size := int32(len(objBuffer.Bytes()))
+    sizeBuffer := new(bytes.Buffer)
+    err = binary.Write(sizeBuffer, binary.LittleEndian, size)
+    if err != nil {
+        return err
+    }
+
+    f.Write(sizeBuffer.Bytes())
+    f.Write(objBuffer.Bytes())
+
+    return err
+}
+
+func decodeObjectFromFile(f *os.File) (interface{}, error) {
+    var (
+        size int32
+        box  EncodeBox
+    )
+    err := binary.Read(f, binary.LittleEndian, &size)
+    if err != nil {
+        return nil, err
+    }
+
+    boxBytes := make([]byte, size)
+    _, err = f.Read(boxBytes)
+    if err != nil {
+        return nil, err
+    }
+
+    buffer := bytes.NewBuffer(boxBytes)
+    decoder := gob.NewDecoder(buffer)
+    if err = decoder.Decode(&box); err == nil {
+        return box.Object, nil
+    }
+    return nil, err
 }

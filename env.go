@@ -62,6 +62,15 @@ func (e *_Environment) stop() {
         return
     }
 
+    // clear the working dir
+    if !e.verbose {
+        err := os.RemoveAll(e.jobWorkDir)
+        if err != nil {
+            parklog("Error when removing job work directory[%s]: %s", e.jobWorkDir, err)
+        } else {
+            parklog("Clear the gopark job work direcotry: %s", e.jobWorkDir)
+        }
+    }
     e.started = false
 }
 

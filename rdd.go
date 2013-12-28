@@ -1,11 +1,10 @@
 package gopark
 
 import (
-    "bytes"
-    "encoding/gob"
     "fmt"
-    "io/ioutil"
+    "io"
     "log"
+    "os"
     "sort"
 )
 
@@ -591,31 +590,44 @@ func (r *_BaseRDD) persistOrCompute(split Split) Yielder {
         if len(r.persistLocation) != 0 {
             pathname := env.getLocalRDDPath(r.id, i)
             parklog("Decoding rdd-%d/%d[GOB] from local file %s", r.id, i, pathname)
-            var values []interface{}
-            bs, err := ioutil.ReadFile(pathname)
+            input, err := os.Open(pathname)
             if err != nil {
                 log.Panicf("Error when persist/decode rdd split[%d], %v", i, err)
             }
-            buffer := bytes.NewBuffer(bs)
-            decoder := gob.NewDecoder(buffer)
-            if err = decoder.Decode(&values); err != nil {
+            defer input.Close()
+
+            var buffer []interface{}
+            encoder := NewBufferEncoder(ENCODE_BUFFER_SIZE)
+            for err == nil {
+                buffer, err = encoder.Decode(input)
+                if err != nil {
+                    break
+                }
+                for _, value := range buffer {
+                    yield <- value
+                }
+            }
+            if err != nil && err != io.EOF {
                 log.Panicf("Error when persist/decode rdd split[%d], %v", i, err)
             }
-            for _, value := range values {
-                yield <- value
-            }
         } else {
-            values := make([]interface{}, 0)
+            pathname := env.getLocalRDDPath(r.id, i)
+            output, err := os.Create(pathname)
+            if err != nil {
+                log.Panicf("Error when creating presist file [%s] for rdd split[%d], %v", pathname, i, err)
+            }
+            defer output.Close()
+            encoder := NewBufferEncoder(ENCODE_BUFFER_SIZE)
             for value := range rdd.compute(split) {
-                values = append(values, value)
+                err = encoder.Encode(output, value)
+                if err != nil {
+                    log.Panicf("Error when encoding object into file for rdd split[%d], %v", i, err)
+                }
                 yield <- value
             }
-            pathname := env.getLocalRDDPath(r.id, i)
-            buffer := new(bytes.Buffer)
-            encoder := gob.NewEncoder(buffer)
-            encoder.Encode(values[:])
-            if err := ioutil.WriteFile(pathname, buffer.Bytes(), 0644); err != nil {
-                log.Panicf("Error when persist/encode rdd split[%d], %v", i, err)
+            err = encoder.Flush(output)
+            if err != nil {
+                log.Panicf("Error when encoding object into file for rdd split[%d], %v", i, err)
             }
             parklog("Encoding rdd-%d/%d[GOB] into local file %s", r.id, i, pathname)
             r.persistLocation = pathname
